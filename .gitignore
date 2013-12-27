@@ -1,0 +1,8 @@
+# Compiled source #
+###################
+*.o
+*.so
+
+# Logs and databases #
+######################
+*.log
