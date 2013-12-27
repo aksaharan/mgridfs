@@ -6,11 +6,17 @@
 #include <unistd.h>
 #include <fuse.h>
 
+#include <string>
+
+#include <mongo/client/gridfs.h>
+#include <mongo/client/connpool.h>
+
+using namespace mongo;
 
 namespace mgridfs {
 
-/* Deprecated, use readdir() instead */
-int mgridfs_getdir(const char *, fuse_dirh_t, fuse_dirfil_t);
+// This is an implementation
+bool mgridfs_create_directory(DBClientBase& dbc, const std::string& dirname, mode_t dirMode, uid_t dirUid, gid_t dirGid);
 
 /** Create a directory 
  *

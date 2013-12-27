@@ -3,33 +3,41 @@
 
 #include <fuse.h>
 
+#include <string>
+#include <boost/bimap.hpp>
+
 #include <mongo/util/net/hostandport.h>
+
+using namespace std;
 
 namespace mgridfs {
 
 struct FSOptions {
 	FSOptions() 
-		: _host(NULL), _db(NULL), _coll(NULL), _port(0), _logFile(NULL), _debugEnabled(false)
-		, _sslEnabled(false) {
+		: _port(0), _debugEnabled(false), _sslEnabled(false), _hostAndPort() {
 		// Nothing to do here
 	}
 
 	static bool fromCommandLine(struct fuse_args& fuseArgs);
 
-	const char* _host;
-	const char* _db;
-	const char* _coll;
+	string _host;
+	string _db;
+	string _collPrefix;
 	unsigned int _port;
 
-	const char* _logFile;
+	string _logFile;
 
 	bool _debugEnabled;
 	bool _sslEnabled;
 
 	mongo::HostAndPort _hostAndPort;
+	std::string _filesNS;
+	std::string _chunksNS;
+
+	boost::bimap<string, string> _metadataKeyMap;
 };
 
-extern mgridfs::FSOptions globalFSOptions;
+extern FSOptions globalFSOptions;
 
 }
 

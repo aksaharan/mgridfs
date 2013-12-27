@@ -104,15 +104,6 @@ int mgridfs_read(const char *, char *, size_t, off_t, struct fuse_file_info *);
  */
 int mgridfs_write(const char *, const char *, size_t, off_t, struct fuse_file_info *);
 
-/** Get file system statistics
- *
- * The 'f_frsize', 'f_favail', 'f_fsid' and 'f_flag' fields are ignored
- *
- * Replaced 'struct statfs' parameter with 'struct statvfs' in
- * version 2.5
- */
-int mgridfs_statfs(const char *, struct statvfs *);
-
 /** Possibly flush cached data
  *
  * BIG NOTE: This is not equivalent to fsync().  It's not a
@@ -250,19 +241,6 @@ int mgridfs_fgetattr(const char *, struct stat *, struct fuse_file_info *);
  * Introduced in version 2.6
  */
 int mgridfs_lock(const char *, struct fuse_file_info *, int cmd, struct flock *);
-
-/**
- * Check file access permissions
- *
- * This will be called for the access() system call.  If the
- * 'default_permissions' mount option is given, this method is not
- * called.
- *
- * This method is not called under Linux kernel versions 2.4.x
- *
- * Introduced in version 2.5
- */
-int mgridfs_access(const char *, int);
 
 /**
  * Change the access and modification times of a file with
