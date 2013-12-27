@@ -2,13 +2,21 @@
 #include "fs_meta_ops.h"
 #include "file_meta_ops.h"
 #include "dir_meta_ops.h"
+#include "fs_logger.h"
 
 #include <unistd.h>
 #include <iostream>
 #include <fuse.h>
 
-static struct fuse_operations mgridfsOps = {};
-mgridfs::FSOptions mgridfs::globalFSOptions;
+using namespace mgridfs;
+
+namespace mgridfs {
+	FSOptions globalFSOptions;
+}
+
+namespace {
+	struct fuse_operations mgridfsOps = {};
+}
 
 int main(int argc, char* argv[], char* arge[]) {
 	std::cout << "MongoDB-GridFS" << std::endl;
@@ -20,7 +28,6 @@ int main(int argc, char* argv[], char* arge[]) {
 	mgridfsOps.readlink = mgridfs::mgridfs_readlink;
 	mgridfsOps.mknod = mgridfs::mgridfs_mknod;
 
-	mgridfsOps.getdir = mgridfs::mgridfs_getdir;
 	mgridfsOps.mkdir = mgridfs::mgridfs_mkdir;
 	mgridfsOps.rmdir = mgridfs::mgridfs_rmdir;
 	mgridfsOps.opendir = mgridfs::mgridfs_opendir;
@@ -47,7 +54,6 @@ int main(int argc, char* argv[], char* arge[]) {
 	mgridfsOps.getxattr = mgridfs::mgridfs_getxattr;
 	mgridfsOps.listxattr = mgridfs::mgridfs_listxattr;
 	mgridfsOps.removexattr = mgridfs::mgridfs_removexattr;
-	mgridfsOps.access = mgridfs::mgridfs_access;
 	mgridfsOps.create = mgridfs::mgridfs_create;
 	mgridfsOps.ftruncate = mgridfs::mgridfs_ftruncate;
 	mgridfsOps.fgetattr = mgridfs::mgridfs_fgetattr;
