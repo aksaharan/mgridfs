@@ -25,24 +25,6 @@ namespace {
  * mount option is given.
  */
 int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
-#if 0
-	struct stat {
-		dev_t     st_dev;     /* ID of device containing file */
-		ino_t     st_ino;     /* inode number */
-		mode_t    st_mode;    /* protection */
-		nlink_t   st_nlink;   /* number of hard links */
-		uid_t     st_uid;     /* user ID of owner */
-		gid_t     st_gid;     /* group ID of owner */
-		dev_t     st_rdev;    /* device ID (if special file) */
-		off_t     st_size;    /* total size, in bytes */
-		blksize_t st_blksize; /* blocksize for file system I/O */
-		blkcnt_t  st_blocks;  /* number of 512B blocks allocated */
-		time_t    st_atime;   /* time of last access */
-		time_t    st_mtime;   /* time of last modification */
-		time_t    st_ctime;   /* time of last status change */
-	};
-#endif
-
 	trace() << "-> entering mgridfs_getattr{" << file << "}" << endl;
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
@@ -86,6 +68,25 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
 	return 0;
 }
 
+/**
+ * Get attributes from an open file
+ *
+ * This method is called instead of the getattr() method if the
+ * file information is available.
+ *
+ * Currently this is only called after the create() method if that
+ * is implemented (see above).  Later it may be called for
+ * invocations of fstat() too.
+ *
+ * Introduced in version 2.5
+ */
+int mgridfs::mgridfs_fgetattr(const char *file, struct stat *stats, struct fuse_file_info *ffinfo) {
+	trace() << "-> entering mgridfs_fgetattr{file: " << file << "}" << endl;
+	int retValue = mgridfs_getattr(file, stats);
+	trace() << "<- leaving mgridfs_fgetattr" << endl;
+	return retValue;
+}
+
 /** Read the target of a symbolic link
  *
  * The buffer should be filled with a null terminated string.  The
@@ -108,6 +109,8 @@ int mgridfs::mgridfs_readlink(const char *file, char *link, size_t len) {
  */
 int mgridfs::mgridfs_mknod(const char *file, mode_t mode, dev_t dev) {
 	trace() << "-> entering mgridfs_mknod{file: " << file << ", mode: " << std::oct << mode << ", dev: " << std::dec << dev << "}" << endl;
+	// TODO: Implement this for some of the types like regular files / named-fifo etc.
+	// This won't be supported for any other special file / device type
 	trace() << "<- leaving mgridfs_mknod" << endl;
 	return -ENOTSUP;
 }
@@ -122,6 +125,7 @@ int mgridfs::mgridfs_unlink(const char *file) {
 /** Create a symbolic link */
 int mgridfs::mgridfs_symlink(const char *srcfile, const char *destfile) {
 	trace() << "-> entering mgridfs_symlink{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
+	//TRACE -> entering mgridfs_symlink{srcfile: /home/ec2-user/source/mgridfs/mgridfs, destfile: /mgridfs}
 	trace() << "<- leaving mgridfs_symlink" << endl;
 	return -ENOTSUP;
 }
@@ -362,41 +366,6 @@ int mgridfs::mgridfs_listxattr(const char *file, char *buffer, size_t len) {
 	//TODO: change the implementation
 	// for now, do nothing and don't support any additional attributes
 	
-/*
-  path = fuse_to_mongo_path(path);
-  if(open_files.find(path) != open_files.end()) {
-	  return 0;
-  }
-
-  ScopedDbConnection sdc(gridfs_options.host);
-  GridFS gf(sdc.conn(), gridfs_options.db);
-  GridFile file = gf.findFile(path);
-  sdc.done();
-
-  if(!file.exists()) {
-	  return -ENOENT;
-  }
-
-  int len = 0;
-  BSONObj metadata = file.getMetadata();
-  set<string> field_set;
-  metadata.getFieldNames(field_set);
-  for(set<string>::const_iterator s = field_set.begin(); s != field_set.end(); s++) {
-	  string attr_name = namespace_xattr(*s);
-	  int field_len = attr_name.size() + 1;
-	  len += field_len;
-	  if(size >= len) {
-		  memcpy(list, attr_name.c_str(), field_len);
-		  list += field_len;
-	  }
-  }
-
-  if(size == 0) {
-	  return len;
-  } else if(size < len) {
-	  return -ERANGE;
-  }
-  */
 	buffer[0] = '\0';
 	trace() << "<- leaving mgridfs_listxattr" << endl;
 	return 0;
@@ -451,24 +420,6 @@ int mgridfs::mgridfs_create(const char *file, mode_t mode, struct fuse_file_info
 int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_info *ffinfo) {
 	trace() << "-> entering mgridfs_ftruncate{file: " << file << ", offset: " << offset << "}" << endl;
 	trace() << "<- leaving mgridfs_ftruncate" << endl;
-	return -ENOTSUP;
-}
-
-/**
- * Get attributes from an open file
- *
- * This method is called instead of the getattr() method if the
- * file information is available.
- *
- * Currently this is only called after the create() method if that
- * is implemented (see above).  Later it may be called for
- * invocations of fstat() too.
- *
- * Introduced in version 2.5
- */
-int mgridfs::mgridfs_fgetattr(const char *file, struct stat *stats, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_fgetattr{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_fgetattr" << endl;
 	return -ENOTSUP;
 }
 
