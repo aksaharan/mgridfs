@@ -9,7 +9,7 @@
 #include <iostream>
 
 bool mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& path, mode_t dirMode, uid_t dirUid, gid_t dirGid) {
-	trace() << "-> entering mgridfs_create_directory{dir: " << path << ", mode: " << dirMode
+	trace() << "-> requested mgridfs_create_directory{dir: " << path << ", mode: " << dirMode
 			<< ", uid: " << dirUid << ", gid: " << dirGid << "}" << std::endl;
 	dirMode |= S_IFDIR;
 
@@ -32,7 +32,6 @@ bool mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& pat
 			<< "metadata.gid" << dirGid
 			<< "metadata.mode" << dirMode)));
 
-	trace() << "<- leaving mgridfs_create_directory" << std::endl;
 	return true;
 }
 
@@ -43,22 +42,22 @@ bool mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& pat
  * correct directory type bits use  mode|S_IFDIR
  * */
 int mgridfs::mgridfs_mkdir(const char *path, mode_t mode) {
-	trace() << "-> entering mgridfs_mkdir{dir: " << path << ", mode: " << std::oct << mode << "}" << endl;
+	trace() << "-> requested mgridfs_mkdir{dir: " << path << ", mode: " << std::oct << mode << "}" << endl;
+
 	fuse_context* fuseContext = fuse_get_context();
 	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
 	if (!mgridfs_create_directory(*pDbc, path, mode, fuseContext->uid, fuseContext->gid)) {
 		return -EACCES;
 	}
 
-	trace() << "-> leaving mgridfs_mkdir" << endl;
 	return 0;
 }
 
 /** Remove a directory */
 int mgridfs::mgridfs_rmdir(const char *path) {
-	trace() << "-> entering mgridfs_rmdir{dir: " << path << "}" << endl;
+	trace() << "-> requested mgridfs_rmdir{dir: " << path << "}" << endl;
 
-	//First check if there are any files under the directory and bail out if any 
+	// First check if there are any files under the directory and bail out if any 
 	fuse_context* fuseContext = fuse_get_context();
 	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
 	auto_ptr<DBClientCursor> pCursor = pDbc->query(globalFSOptions._filesNS, BSON("metadata.directory" << path));
@@ -72,7 +71,6 @@ int mgridfs::mgridfs_rmdir(const char *path) {
 	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
 	gridFS.removeFile(path);
 
-	trace() << "-> leaving mgridfs_rmdir" << endl;
 	return 0;
 }
 
@@ -87,7 +85,7 @@ int mgridfs::mgridfs_rmdir(const char *path) {
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_opendir{dir: " << path << "}" << endl;
+	trace() << "-> requested mgridfs_opendir{dir: " << path << "}" << endl;
 
 	fuse_context* fuseContext = fuse_get_context();
 	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
@@ -114,7 +112,6 @@ int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
 		return -ENFILE;
 	}
 
-	trace() << "<- leaving mgridfs_opendir" << endl;
 	return 0;
 }
 
@@ -140,7 +137,7 @@ int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ffdir, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_readdir{dir: " << path << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_readdir{dir: " << path << ", offset: " << offset << "}" << endl;
 
 	// Add meta directory links
 	ffdir(dirlist, ".", NULL, 0);
@@ -175,7 +172,6 @@ int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ff
 	// Add logic to list local not yet committed files as well in the directory
 	// TODO: List the local files which are being written to temporary buffer until it
 	// is committed and saved back to the GridFS database
-	trace() << "<- leaving mgridfs_readdir" << endl;
 	return 0;
 }
 
@@ -184,12 +180,11 @@ int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ff
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_releasedir(const char *path, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_releasedir{dir: " << path << "}" << endl;
+	trace() << "-> requested mgridfs_releasedir{dir: " << path << "}" << endl;
 
 	FileHandle fileHandle(path);
 	fileHandle.unassignHandle();
 
-	trace() << "<- leaving mgridfs_releasedir" << endl;
 	return 0;
 }
 
@@ -201,8 +196,7 @@ int mgridfs::mgridfs_releasedir(const char *path, struct fuse_file_info *ffinfo)
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_fsyncdir(const char *path, int param, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_fsyncdir{dir: " << path << ", param: " << param << "}" << endl;
-	trace() << "<- leaving mgridfs_fsyncdir" << endl;
+	trace() << "-> requested mgridfs_fsyncdir{dir: " << path << ", param: " << param << "}" << endl;
 	//TODO: find out more about this call and implement appropriately
 	return -EACCES;
 }
