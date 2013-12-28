@@ -158,12 +158,11 @@ int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ff
 		// Catch for the AssertionException
 		try {
 			BSONObj obj = cursor->nextSafe();
-			trace() << "iterating for directory " << obj.getStringField("filename") << endl;
-
 			BSONElement elem = obj.getFieldDotted("metadata.filename");
+			trace() << "iterating for directory {file: " << obj.getStringField("filename") << ", metadata.filename: "
+					<< elem.String() << endl;
 			if (elem.ok() && !elem.String().empty()) {
 				ffdir(dirlist, elem.String().c_str(), NULL, 0);
-				trace() << "iterating for directory filename " << elem.String() << endl;
 			} else if (strcmp("/", path)) {
 				warn() << "Ignoring for missing metadata.filename property" << endl;
 			}
