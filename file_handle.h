@@ -1,5 +1,5 @@
-#ifndef file_handle_h
-#define file_handle_h
+#ifndef mgridfs_file_handle_h
+#define mgridfs_file_handle_h
 
 #include <string>
 #include <boost/bimap.hpp>
