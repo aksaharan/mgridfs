@@ -1,5 +1,5 @@
-#ifndef fs_logger_h
-#define fs_logger_h
+#ifndef mgridfs_fs_logger_h
+#define mgridfs_fs_logger_h
 
 #include <string>
 #include <fstream>
