@@ -21,13 +21,27 @@ namespace {
 int main(int argc, char* argv[], char* arge[]) {
 	std::cout << "MongoDB-GridFS" << std::endl;
 
+	// File-system meta / setup / cleanup functions
 	mgridfsOps.init = mgridfs::mgridfs_init;
 	mgridfsOps.destroy = mgridfs::mgridfs_destroy;
+	mgridfsOps.statfs = mgridfs::mgridfs_statfs;
 
+	// File/Directory attribute management functionality
 	mgridfsOps.getattr = mgridfs::mgridfs_getattr;
-	mgridfsOps.readlink = mgridfs::mgridfs_readlink;
+	mgridfsOps.fgetattr = mgridfs::mgridfs_fgetattr;
+	mgridfsOps.access = NULL; // optional, un-implemented functionality
+	mgridfsOps.setxattr = mgridfs::mgridfs_setxattr;
+	mgridfsOps.getxattr = mgridfs::mgridfs_getxattr;
+	mgridfsOps.listxattr = mgridfs::mgridfs_listxattr;
+	mgridfsOps.removexattr = mgridfs::mgridfs_removexattr;
+	mgridfsOps.chmod = mgridfs::mgridfs_chmod;
+	mgridfsOps.chown = mgridfs::mgridfs_chown;
+	mgridfsOps.utime = mgridfs::mgridfs_utime;
+	mgridfsOps.utimens = mgridfs::mgridfs_utimens;
+
 	mgridfsOps.mknod = mgridfs::mgridfs_mknod;
 
+	// Directory functionality
 	mgridfsOps.mkdir = mgridfs::mgridfs_mkdir;
 	mgridfsOps.rmdir = mgridfs::mgridfs_rmdir;
 	mgridfsOps.opendir = mgridfs::mgridfs_opendir;
@@ -35,30 +49,24 @@ int main(int argc, char* argv[], char* arge[]) {
 	mgridfsOps.releasedir = mgridfs::mgridfs_releasedir;
 	mgridfsOps.fsyncdir = mgridfs::mgridfs_fsyncdir;
 
+	// File linking functionality functions
+	mgridfsOps.link = NULL; // Hard-links are not supported
+	mgridfsOps.readlink = mgridfs::mgridfs_readlink;
 	mgridfsOps.unlink = mgridfs::mgridfs_unlink;
 	mgridfsOps.symlink = mgridfs::mgridfs_symlink;
+
+	// Normal file related operations
 	mgridfsOps.rename = mgridfs::mgridfs_rename;
-	mgridfsOps.link = mgridfs::mgridfs_link;
-	mgridfsOps.chmod = mgridfs::mgridfs_chmod;
-	mgridfsOps.chown = mgridfs::mgridfs_chown;
 	mgridfsOps.truncate = mgridfs::mgridfs_truncate;
-	mgridfsOps.utime = mgridfs::mgridfs_utime;
+	mgridfsOps.ftruncate = mgridfs::mgridfs_ftruncate;
 	mgridfsOps.open = mgridfs::mgridfs_open;
 	mgridfsOps.read = mgridfs::mgridfs_read;
 	mgridfsOps.write = mgridfs::mgridfs_write;
-	mgridfsOps.statfs = mgridfs::mgridfs_statfs;
 	mgridfsOps.flush = mgridfs::mgridfs_flush;
 	mgridfsOps.release = mgridfs::mgridfs_release;
 	mgridfsOps.fsync = mgridfs::mgridfs_fsync;
-	mgridfsOps.setxattr = mgridfs::mgridfs_setxattr;
-	mgridfsOps.getxattr = mgridfs::mgridfs_getxattr;
-	mgridfsOps.listxattr = mgridfs::mgridfs_listxattr;
-	mgridfsOps.removexattr = mgridfs::mgridfs_removexattr;
 	mgridfsOps.create = mgridfs::mgridfs_create;
-	mgridfsOps.ftruncate = mgridfs::mgridfs_ftruncate;
-	mgridfsOps.fgetattr = mgridfs::mgridfs_fgetattr;
 	mgridfsOps.lock = mgridfs::mgridfs_lock;
-	mgridfsOps.utimens = mgridfs::mgridfs_utimens;
 	mgridfsOps.bmap = mgridfs::mgridfs_bmap;
 	mgridfsOps.ioctl = mgridfs::mgridfs_ioctl;
 	mgridfsOps.poll = mgridfs::mgridfs_poll;
