@@ -1,6 +1,8 @@
 #ifndef mgridfs_fs_options_h
 #define mgridfs_fs_options_h
 
+#include "fs_logger.h"
+
 #include <fuse.h>
 
 #include <string>
@@ -12,9 +14,13 @@ using namespace std;
 
 namespace mgridfs {
 
+extern const unsigned int MGRIDFS_MAJOR_VERSION;
+extern const unsigned int MGRIDFS_MINOR_VERSION;
+extern const unsigned int MGRIDFS_PATCH_VERSION;
+
 struct FSOptions {
 	FSOptions() 
-		: _port(0), _debugEnabled(false), _sslEnabled(false), _hostAndPort() {
+		: _port(0), _hostAndPort() {
 		// Nothing to do here
 	}
 
@@ -26,9 +32,7 @@ struct FSOptions {
 	unsigned int _port;
 
 	string _logFile;
-
-	bool _debugEnabled;
-	bool _sslEnabled;
+	LogLevel _logLevel;
 
 	mongo::HostAndPort _hostAndPort;
 	std::string _filesNS;

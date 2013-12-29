@@ -1,6 +1,7 @@
 #include "fs_options.h"
 #include "fs_logger.h"
 #include "fs_meta_ops.h"
+#include "utils.h"
 
 #include <iostream>
 #include <mongo/client/connpool.h>
@@ -18,10 +19,8 @@ struct _ParsedFuseOptions {
 	const char* _collPrefix;
 	unsigned int _port;
 
-	const char* _logFile;
-
-	bool _debugEnabled;
-	bool _sslEnabled;
+	char* _logFile;
+	char* _logLevel;
 };
 
 static struct _ParsedFuseOptions _parsedFuseOptions;
@@ -30,8 +29,6 @@ static struct _ParsedFuseOptions _parsedFuseOptions;
 
 enum MGRIDFS_KEYS {
 	KEY_NONE,
-	KEY_DEBUG,
-	KEY_SSL,
 	KEY_HELP,
 	KEY_VERSION,
 };
@@ -42,20 +39,33 @@ struct fuse_opt mgridfsOptions[] = {
 	MGRIDFS_OPT_KEY("--db=%s", _db, 0),
 	MGRIDFS_OPT_KEY("--collprefix=%s", _collPrefix, 0),
 	MGRIDFS_OPT_KEY("--logfile=%s", _logFile, 0),
-	FUSE_OPT_KEY("--debug", KEY_DEBUG),
-	FUSE_OPT_KEY("--ssl", KEY_SSL),
+	MGRIDFS_OPT_KEY("--loglevel=%s", _logLevel, 0),
 	FUSE_OPT_KEY("--help", KEY_HELP),
 	FUSE_OPT_KEY("--version", KEY_VERSION),
 	{NULL}
 };
 
 void printHelp(int exitCode) {
-	std::cout << "usage: ./mgridfs [options] mountpoint" << std::endl;
-
+	std::cout << "usage: [sudo] ./mgridfs [mgridfs-options] [fuse-options] mountpoint" << endl
+			<< " mountpoint              path where mgridfs should be mounted" << endl
+			<< endl
+			<< "mgridfs-options" << endl
+			<< "----------------" << endl
+			<< " --host=<host>           mongodb hostname (defaults to localhost)" << endl
+			<< " --port=<port>           mongodb port number (defaults to 27017)" << endl
+			<< " --db=<db>               mongo GridFS db name" << endl
+			<< " --collprefix=<host>     mongo GridFS collection name prefix (defaults to fs)" << endl
+			<< " --logfile=<file>        logfile for persistent logging from daemon" << endl
+			<< " --loglevel=<level>      logging level for logs" << endl
+			<< " --help                  diplay help for command options" << endl
+			<< " --version               display mgridfs version information" << endl
+			<< endl 
+			<< "fuse-options (\"man mount.fuse\" for detailed options)" << endl
+			<< "-------------------------------------------------------" << endl
+		;
+		
 	//TODO: Print correct help document
-	if (exitCode) {
-		::exit(exitCode);
-	}
+	::exit(exitCode);
 }
 
 int fuseOptionCallback(void* data, const char* arg, int key, struct fuse_args* outArgs) {
@@ -65,20 +75,12 @@ int fuseOptionCallback(void* data, const char* arg, int key, struct fuse_args* o
 	}
 
 	if (key == KEY_VERSION) {
-		std::cout << "mgridfs version 0.0.1" << std::endl;
-		return -1;
-	}
-
-	if (key == KEY_SSL) {
-		_parsedFuseOptions._sslEnabled = true;
-		std::cout << "Enabled SSL mode support" << std::endl;
-		return 0;
-	}
-
-	if (key == KEY_DEBUG) {
-		_parsedFuseOptions._debugEnabled = true;
-		std::cout << "Enabled debug mode" << std::endl;
-		return 0;
+		std::cout << "mgridfs " << mgridfs::MGRIDFS_MAJOR_VERSION
+				<< "." << mgridfs::MGRIDFS_MINOR_VERSION
+				<< "." << mgridfs::MGRIDFS_PATCH_VERSION
+				<< endl
+			;
+		::exit(0);
 	}
 
 	return 1;
@@ -87,20 +89,76 @@ int fuseOptionCallback(void* data, const char* arg, int key, struct fuse_args* o
 } // End of Anonymous space
 
 
+// Define version number
+const unsigned int mgridfs::MGRIDFS_MAJOR_VERSION = 0;
+const unsigned int mgridfs::MGRIDFS_MINOR_VERSION = 1;
+const unsigned int mgridfs::MGRIDFS_PATCH_VERSION = 0;
+
+
 bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 	if (fuse_opt_parse(&fuseArgs, &_parsedFuseOptions, mgridfsOptions, fuseOptionCallback) == -1) {
 		return false;
 	}
 
-	std::cout << "Filesystem invocation requested for following parameters" << std::endl
-			<< "  Host: " << _parsedFuseOptions._host << std::endl
-			<< "  Port: " << _parsedFuseOptions._port << std::endl
-			<< "  DB: " << _parsedFuseOptions._db << std::endl
-			<< "  Collection Prefix: " << _parsedFuseOptions._collPrefix << std::endl
-			<< "  LogFile: " << _parsedFuseOptions._logFile << std::endl
-			<< "  debugEnabled: " << _parsedFuseOptions._debugEnabled << std::endl
-			<< "  sslEnabled: " << _parsedFuseOptions._sslEnabled << std::endl
+	info() << "Filesystem invocation requested for following parameters" << endl
+			<< "  Host: " << _parsedFuseOptions._host << endl
+			<< "  Port: " << _parsedFuseOptions._port << endl
+			<< "  DB: " << _parsedFuseOptions._db << endl
+			<< "  Collection Prefix: " << _parsedFuseOptions._collPrefix << endl
+			<< "  LogFile: " << _parsedFuseOptions._logFile << endl
+			<< "  LogLevel: " << _parsedFuseOptions._logLevel << endl
 		;
+
+	if (!_parsedFuseOptions._host) {
+		_parsedFuseOptions._host = "localhost";
+		info() << "Setting mongodb connection hostname -> " << _parsedFuseOptions._host << endl;
+	}
+
+	if (!_parsedFuseOptions._port) {
+		_parsedFuseOptions._port = 27017;
+		info() << "Setting mongodb connection port -> " << _parsedFuseOptions._port << endl;
+	} else if (_parsedFuseOptions._port < 0 || _parsedFuseOptions._port > 65535) {
+		fatal() << "Port number cannot be outside valid range [1..65535]: found to be " << _parsedFuseOptions._port;
+		return false;
+	}
+
+	if (!_parsedFuseOptions._db) {
+		_parsedFuseOptions._db = "test";
+		info() << "Setting mongodb database -> " << _parsedFuseOptions._db << endl;
+	}
+
+	if (!_parsedFuseOptions._collPrefix) {
+		_parsedFuseOptions._collPrefix = "fs";
+		info() << "Setting mongodb collprefix -> " << _parsedFuseOptions._collPrefix << endl;
+	}
+
+	globalFSOptions._db = _parsedFuseOptions._db;
+	globalFSOptions._collPrefix = _parsedFuseOptions._collPrefix;
+	globalFSOptions._host = _parsedFuseOptions._host;
+	globalFSOptions._port = _parsedFuseOptions._port;
+	globalFSOptions._logFile = _parsedFuseOptions._logFile;
+	if (_parsedFuseOptions._logLevel) {
+		globalFSOptions._logLevel = FSLogManager::get().stringToLogLevel(toUpper(_parsedFuseOptions._logLevel));
+		if (globalFSOptions._logLevel == LL_INVALID) {
+			error() << "Invalid logLevel specified on the command-line, will default to INFO level" << endl;
+			globalFSOptions._logLevel = LL_INFO;
+		}
+	} else {
+		globalFSOptions._logLevel = LL_INFO;
+	}
+	info() << "Setting log level {LogLevel: " << FSLogManager::get().logLevelToString(globalFSOptions._logLevel) << "}" << endl;
+	FSLogManager::get().setLogLevel(globalFSOptions._logLevel);
+
+	globalFSOptions._filesNS = _parsedFuseOptions._db + string(".") + _parsedFuseOptions._collPrefix + string(".files");
+	globalFSOptions._chunksNS = _parsedFuseOptions._db + string(".") + _parsedFuseOptions._collPrefix + string(".chunks");
+	info() << "Collection namespaces {Files: " << globalFSOptions._filesNS
+			<< ", Chunks: " << globalFSOptions._chunksNS << "}"
+			<< endl;
+
+	globalFSOptions._hostAndPort = mongo::HostAndPort(_parsedFuseOptions._host, _parsedFuseOptions._port);
+	if (!mgridfs::mgridfs_load_or_create_root()) {
+		return false;
+	}
 
 	if (_parsedFuseOptions._logFile) {
 		FSLogFile* fsLogFile = new FSLogFile(_parsedFuseOptions._logFile);
@@ -112,45 +170,6 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 			fatal() << "Failed to initialize log file {file: " << _parsedFuseOptions._logFile << "}, will continue "
 					<< "with existing logging facility." << endl;
 		}
-	}
-
-	if (!_parsedFuseOptions._host) {
-		_parsedFuseOptions._host = "localhost";
-		std::cout << "Setting mongodb connection hostname -> " << _parsedFuseOptions._host << std::endl;
-	}
-
-	if (!_parsedFuseOptions._port) {
-		_parsedFuseOptions._port = 27017;
-		std::cout << "Setting mongodb connection port -> " << _parsedFuseOptions._port << std::endl;
-	} else if (_parsedFuseOptions._port < 0 || _parsedFuseOptions._port > 65535) {
-		std::cerr << "Port number cannot be outside valid range [1..65535]: found to be " << _parsedFuseOptions._port;
-		return false;
-	}
-
-	if (!_parsedFuseOptions._db) {
-		_parsedFuseOptions._db = "test";
-		std::cout << "Setting mongodb database -> " << _parsedFuseOptions._db << std::endl;
-	}
-
-	if (!_parsedFuseOptions._collPrefix) {
-		_parsedFuseOptions._collPrefix = "fs";
-		std::cout << "Setting mongodb collprefix -> " << _parsedFuseOptions._collPrefix << std::endl;
-	}
-
-	globalFSOptions._db = _parsedFuseOptions._db;
-	globalFSOptions._collPrefix = _parsedFuseOptions._collPrefix;
-	globalFSOptions._host = _parsedFuseOptions._host;
-	globalFSOptions._port = _parsedFuseOptions._port;
-	globalFSOptions._logFile = _parsedFuseOptions._logFile;
-	globalFSOptions._filesNS = _parsedFuseOptions._db + string(".") + _parsedFuseOptions._collPrefix + string(".files");
-	globalFSOptions._chunksNS = _parsedFuseOptions._db + string(".") + _parsedFuseOptions._collPrefix + string(".chunks");
-	std::cout << "Collection namespaces {Files: " << globalFSOptions._filesNS
-			<< ", Chunks: " << globalFSOptions._chunksNS << "}"
-			<< std::endl;
-
-	globalFSOptions._hostAndPort = mongo::HostAndPort(_parsedFuseOptions._host, _parsedFuseOptions._port);
-	if (!mgridfs::mgridfs_load_or_create_root()) {
-		return false;
 	}
 
 	// Add metadata bimap for the extended attributes for the files
