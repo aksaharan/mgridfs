@@ -3,6 +3,8 @@
 #include <sstream>
 #include <fstream>
 #include <iostream>
+#include <cctype>
+#include <algorithm>
 
 #include <boost/bimap.hpp>
 #include <mongo/util/time_support.h>
@@ -115,116 +117,4 @@ FSLogStream::~FSLogStream() {
 		delete _os;
 		_os = NULL;
 	}
-}
-
-FSLogStream& FSLogStream::operator<<(const string& s) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << s;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(const char* const s) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << s;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(char c) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << c;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(int i) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << i;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(unsigned int ui) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << ui;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(long l) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << l;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(unsigned long l) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << l;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(long long ll) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << ll;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(unsigned long long ll) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << ll;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(short s) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << s;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(float f) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << f;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(double d) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << d;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(std::ostream& (*manip)(std::ostream&)) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << manip;
-	}
-	return *this;
-}
-
-FSLogStream& FSLogStream::operator<<(std::ios_base& (*manip)(std::ios_base&)) {
-	if (_ll >= _enabledLL) {
-		_dirty = true;
-		*this->_os << manip;
-	}
-	return *this;
 }
