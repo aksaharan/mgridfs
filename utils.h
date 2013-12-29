@@ -10,6 +10,10 @@ namespace mgridfs {
 string getPathBasename(const string& path);
 string getPathDirname(const string& path);
 
+char* toUpper(char* str);
+
+unsigned long get512BlockCount(unsigned long size);
+
 }
 
 #endif

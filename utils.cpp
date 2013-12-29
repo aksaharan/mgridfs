@@ -20,3 +20,17 @@ string mgridfs::getPathDirname(const string& path) {
 	char* dirName = dirname(pathTemp);
 	return string(dirName);
 }
+
+char* mgridfs::toUpper(char* str) {
+	char* retStr = str;
+	if (str) {
+		for ( ; *str; ++str)
+			*str = toupper(*str);
+	}
+
+	return retStr;
+}
+
+unsigned long mgridfs::get512BlockCount(unsigned long size) {
+	return ((size + 511) / 512);
+}
