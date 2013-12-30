@@ -15,10 +15,11 @@ bool mgridfs::mgridfs_load_or_create_root() {
 	DBClientConnection dbc(true);
 	string errorMessage;
 	if (!dbc.connect(globalFSOptions._hostAndPort, errorMessage)) {
-		std::cout << "Failed to connect to the server {error: " << errorMessage << "}" << std::endl;
+		error() << "Failed to connect to the server {error: " << errorMessage << "}" << std::endl;
+		return false;
 	}
 
-	std::cout << "Connection to mongodb succeeded {ConnId: " << dbc.getConnectionId() 
+	info() << "Connection to mongodb succeeded {ConnId: " << dbc.getConnectionId() 
 			<< ", WireVersion: {Min: " << dbc.getMinWireVersion() << ", Max: " << dbc.getMaxWireVersion() << "}"
 			<< ", IsConnected: " << dbc.isStillConnected() << ", SO-timeout: " << dbc.getSoTimeout()
 			<< ", Type: " << (long)dbc.type() << "}" << std::endl;
@@ -26,19 +27,19 @@ bool mgridfs::mgridfs_load_or_create_root() {
 	GridFS gridFS(dbc, globalFSOptions._db, globalFSOptions._collPrefix);
 	GridFile gridFile = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
 
-	std::cout << "GridFile from query {Filename: " << gridFile.getFilename() << ", metadata: " << gridFile.getMetadata() << std::endl;
+	debug() << "GridFile from query {Filename: " << gridFile.getFilename() << ", metadata: " << gridFile.getMetadata() << std::endl;
 	if (!gridFile.exists()) {
-		std::cout << "Root directory not found for mounting, will try to create one now with following credentials: "
+		info() << "Root directory not found for mounting, will try to create one now with following credentials: "
 				<< "{UID: " << geteuid() << ", GID: " << getegid() << ", mode: 700" << "}"
 				<< std::endl;
 		if (!mgridfs_create_directory(dbc, "/", 0700, geteuid(), getegid())) {
-			std::cout << "Failed to create root for the mounted filesystem in MongoDB" << std::endl;
+			error() << "Failed to create root for the mounted filesystem in MongoDB" << std::endl;
 			return false;
 		}
 
 		GridFile gridFile1 = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
 		if (!gridFile1.exists()) {
-			std::cout << "Tried creating and failed to create the root directory, will not proceed further with file system mount"
+			error() << "Tried creating and failed to create the root directory, will not proceed further with file system mount"
 					<< std::endl;
 			return false;
 		}
@@ -55,7 +56,7 @@ bool mgridfs::mgridfs_load_or_create_root() {
  * destroy() method.
  */
 void* mgridfs::mgridfs_init(struct fuse_conn_info* conn) {
-	trace() << "-> entering mgridfs_init(fuse_conn_info)" << endl;
+	trace() << "-> requested mgridfs_init(fuse_conn_info)" << endl;
 
 	DBClientConnection* pDbc = new DBClientConnection(true);
 	string errorMessage;
@@ -65,12 +66,11 @@ void* mgridfs::mgridfs_init(struct fuse_conn_info* conn) {
 		fuse_exit(NULL);
 	}
 
-	std::cout << "Connection to mongodb succeeded {ConnId: " << pDbc->getConnectionId() 
+	info() << "Connection to mongodb succeeded {ConnId: " << pDbc->getConnectionId() 
 			<< ", WireVersion: {Min: " << pDbc->getMinWireVersion() << ", Max: " << pDbc->getMaxWireVersion() << "}"
 			<< ", IsConnected: " << pDbc->isStillConnected() << ", SO-timeout: " << pDbc->getSoTimeout()
 			<< ", Type: " << (long)pDbc->type() << "}" << std::endl;
 
-	trace() << "<- leaving mgridfs_init(fuse_conn_info)" << endl;
 	return reinterpret_cast<void*>(pDbc);
 }
 
@@ -80,10 +80,9 @@ void* mgridfs::mgridfs_init(struct fuse_conn_info* conn) {
  * Called on filesystem exit.
  */
 void mgridfs::mgridfs_destroy(void* data) {
-	trace() << "-> entering mgridfs_destroy(fuse_conn_info)" << endl;
+	trace() << "-> requested mgridfs_destroy(fuse_conn_info)" << endl;
 
 	delete reinterpret_cast<DBClientConnection*>(data);
-	trace() << "<- leaving mgridfs_destroy(fuse_conn_info)" << endl;
 }
 
 /** Get file system statistics
@@ -94,7 +93,7 @@ void mgridfs::mgridfs_destroy(void* data) {
  * version 2.5
  */
 int mgridfs::mgridfs_statfs(const char *file, struct statvfs *statEntry) {
-	trace() << "-> entering mgridfs_statfs{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_statfs{file: " << file << "}" << endl;
 
 	fuse_context* fuseContext = fuse_get_context();
 	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
@@ -143,7 +142,5 @@ int mgridfs::mgridfs_statfs(const char *file, struct statvfs *statEntry) {
 	}
 
 	statEntry->f_namemax = 1000;
-
-	trace() << "<- leaving mgridfs_statfs" << endl;
 	return 0;
 }
