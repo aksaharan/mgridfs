@@ -1,6 +1,7 @@
 #include "file_meta_ops.h"
 #include "fs_options.h"
 #include "fs_logger.h"
+#include "utils.h"
 
 #include <string.h>
 #include <errno.h>
@@ -25,7 +26,7 @@ namespace {
  * mount option is given.
  */
 int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
-	trace() << "-> entering mgridfs_getattr{" << file << "}" << endl;
+	trace() << "-> requested mgridfs_getattr{" << file << "}" << endl;
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
 		error() << "Encountered null client connection value, will return error" << endl;
@@ -57,14 +58,24 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
 	file_stat->st_nlink = 1;
 	if (S_ISDIR(file_stat->st_mode)) {
 		file_stat->st_nlink++;
+		file_stat->st_size = fileMeta.objsize();
+		file_stat->st_blocks = get512BlockCount(file_stat->st_size);
 	} else if (S_ISREG(file_stat->st_mode)) {
 		file_stat->st_size = gridFile.getContentLength();
+		file_stat->st_blocks = get512BlockCount(file_stat->st_size);
+	} else if (S_ISLNK(file_stat->st_mode)) {
+		const char* targetLink = fileMeta.getStringField("target");
+		if (targetLink) {
+			file_stat->st_size = strlen(targetLink);
+			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
+		} else {
+			warn() << "Encountered a NULL target field for a link" << endl;
+		}
 	} else {
-		warn() << "Encountered unknown file stat mode for theh entry " << gridFile.getMetadata()
+		warn() << "Encountered unsupported file stat mode for the entry " << gridFile.getMetadata()
 				<< " -> {filename: " << gridFile.getFilename() << "}" << endl;
 	}
 
-	trace() << "<- leaving mgridfs_getattr" << endl;
 	return 0;
 }
 
@@ -81,10 +92,27 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_fgetattr(const char *file, struct stat *stats, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_fgetattr{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_fgetattr{file: " << file << "}" << endl;
+
 	int retValue = mgridfs_getattr(file, stats);
-	trace() << "<- leaving mgridfs_fgetattr" << endl;
+
 	return retValue;
+}
+
+/** Create a file node
+ *
+ * This is called for creation of all non-directory, non-symlink
+ * nodes.  If the filesystem defines a create() method, then for
+ * regular files that will be called instead.
+ */
+int mgridfs::mgridfs_mknod(const char *file, mode_t mode, dev_t dev) {
+	trace() << "-> requested mgridfs_mknod{file: " << file << ", mode: " << std::oct << mode << ", dev: " << std::dec << dev << "}" << endl;
+
+	// TODO: Implement this for some of the types like regular files / named-fifo etc.
+	// This won't be supported for any other special file / device type
+
+
+	return -ENOTSUP;
 }
 
 /** Read the target of a symbolic link
@@ -96,57 +124,102 @@ int mgridfs::mgridfs_fgetattr(const char *file, struct stat *stats, struct fuse_
  * for success.
  */
 int mgridfs::mgridfs_readlink(const char *file, char *link, size_t len) {
-	trace() << "-> entering mgridfs_readlink{file: " << file << ", len: " << len << "}" << endl;
-	trace() << "<- leaving mgridfs_readlink" << endl;
-	return -ENOTSUP;
-}
+	trace() << "-> requested mgridfs_readlink{file: " << file << ", len: " << len << "}" << endl;
+	if (len <= 0) {
+		return -EINVAL;
+	}
 
-/** Create a file node
- *
- * This is called for creation of all non-directory, non-symlink
- * nodes.  If the filesystem defines a create() method, then for
- * regular files that will be called instead.
- */
-int mgridfs::mgridfs_mknod(const char *file, mode_t mode, dev_t dev) {
-	trace() << "-> entering mgridfs_mknod{file: " << file << ", mode: " << std::oct << mode << ", dev: " << std::dec << dev << "}" << endl;
-	// TODO: Implement this for some of the types like regular files / named-fifo etc.
-	// This won't be supported for any other special file / device type
-	trace() << "<- leaving mgridfs_mknod" << endl;
-	return -ENOTSUP;
+	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
+	if (!pConn) {
+		error() << "Encountered null client connection value, will return error" << endl;
+		return -EFAULT;
+	}
+
+	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
+	GridFile gridFile = gridFS.findFile(BSON("filename" << file));
+	if (!gridFile.exists()) {
+		debug() << "Requested file not found for symlink listing {file: " << file << "}" << endl;
+		return -ENOENT;
+	}
+
+	BSONObj fileMeta = gridFile.getMetadata();
+	const char* targetLink = fileMeta.getStringField("target");
+	if (targetLink) {
+		strncpy(link, targetLink, len - 1);
+		link[len - 1] = 0;
+	} else {
+		link[0] = 0;
+		warn() << "Encountered a NULL target field for a link, will return empty value" << endl;
+	}
+
+	return 0;
 }
 
 /** Remove a file */
 int mgridfs::mgridfs_unlink(const char *file) {
-	trace() << "-> entering mgridfs_unlink{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_unlink" << endl;
-	return -ENOTSUP;
+	trace() << "-> requested mgridfs_unlink{file: " << file << "}" << endl;
+
+	fuse_context* fuseContext = fuse_get_context();
+	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
+	gridFS.removeFile(file);
+
+	return 0;
 }
 
 /** Create a symbolic link */
 int mgridfs::mgridfs_symlink(const char *srcfile, const char *destfile) {
-	trace() << "-> entering mgridfs_symlink{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
-	//TRACE -> entering mgridfs_symlink{srcfile: /home/ec2-user/source/mgridfs/mgridfs, destfile: /mgridfs}
-	trace() << "<- leaving mgridfs_symlink" << endl;
-	return -ENOTSUP;
+	trace() << "-> requested mgridfs_symlink{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
+
+	fuse_context* fuseContext = fuse_get_context();
+	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+	if (!pConn) {
+		error() << "Encountered null client connection value, will return error" << endl;
+		return -EFAULT;
+	}
+
+	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
+	BSONObj fileObj = gridFS.storeFile("", 0, destfile);
+	if (!fileObj.isValid()) {
+		error() << "Failed to create link file {destfile: " << destfile << "}" << std::endl;
+		return -EFAULT;
+	}
+
+	debug() << "File System created link object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
+			<< "}" << std::endl;
+
+	mode_t linkMode = S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO;
+	BSONElement fileObjId = fileObj.getField("_id");
+	pConn->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "slink"
+			<< "metadata.target" << srcfile
+			<< "metadata.filename" << mgridfs::getPathBasename(destfile)
+			<< "metadata.directory" << mgridfs::getPathDirname(destfile)
+			<< "metadata.lastUpdated" << jsTime()
+			<< "metadata.uid" << fuseContext->uid
+			<< "metadata.gid" << fuseContext->gid
+			<< "metadata.mode" << linkMode)));
+
+	return 0;
 }
 
 /** Rename a file */
 int mgridfs::mgridfs_rename(const char *srcfile, const char *destfile) {
-	trace() << "-> entering mgridfs_rename{srcfie: " << srcfile << ", destfile: " << destfile << "}" << endl;
-	trace() << "<- leaving mgridfs_rename" << endl;
+	trace() << "-> requested mgridfs_rename{srcfie: " << srcfile << ", destfile: " << destfile << "}" << endl;
+
 	return -ENOTSUP;
 }
 
 /** Create a hard link to a file */
 int mgridfs::mgridfs_link(const char *srcfile, const char *destfile) {
-	trace() << "-> entering mgridfs_link{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
-	trace() << "<- leaving mgridfs_link" << endl;
+	trace() << "-> requested mgridfs_link{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
+
+	info() << "hard-links are not supported {srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
 	return -ENOTSUP;
 }
 
 /** Change the permission bits of a file */
 int mgridfs::mgridfs_chmod(const char *file, mode_t mode) {
-	trace() << "-> entering mgridfs_chmod{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
+	trace() << "-> requested mgridfs_chmod{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
 		error() << "Encountered null client connection value, will return error" << endl;
@@ -161,13 +234,12 @@ int mgridfs::mgridfs_chmod(const char *file, mode_t mode) {
 		return -ENOENT;
 	}
 
-	trace() << "<- leaving mgridfs_chmod" << endl;
 	return 0;
 }
 
 /** Change the owner and group of a file */
 int mgridfs::mgridfs_chown(const char *file, uid_t uid, gid_t gid) {
-	trace() << "-> entering mgridfs_chown{file: " << file << ", uid: " << uid << ", gid: " << gid << "}" << endl;
+	trace() << "-> requested mgridfs_chown{file: " << file << ", uid: " << uid << ", gid: " << gid << "}" << endl;
 
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
@@ -183,14 +255,12 @@ int mgridfs::mgridfs_chown(const char *file, uid_t uid, gid_t gid) {
 		return -ENOENT;
 	}
 
-	trace() << "<- leaving mgridfs_chown" << endl;
 	return 0;
 }
 
 /** Change the size of a file */
 int mgridfs::mgridfs_truncate(const char *file, off_t len) {
-	trace() << "-> entering mgridfs_truncate{file: " << file << ", len: " << len << "}" << endl;
-	trace() << "<- leaving mgridfs_truncate" << endl;
+	trace() << "-> requested mgridfs_truncate{file: " << file << ", len: " << len << "}" << endl;
 	return -ENOTSUP;
 }
 
@@ -199,7 +269,7 @@ int mgridfs::mgridfs_truncate(const char *file, off_t len) {
  * Deprecated, use utimens() instead.
  */
 int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
-	trace() << "-> entering mgridfs_utime{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_utime{file: " << file << "}" << endl;
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
 		error() << "Encountered null client connection value, will return error" << endl;
@@ -221,7 +291,7 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
 		debug() << "Failed to utime requested file {file: " << file << "}" << endl;
 		return -ENOENT;
 	}
-	trace() << "<- leaving mgridfs_utime" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -243,8 +313,8 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_open{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_open" << endl;
+	trace() << "-> requested mgridfs_open{file: " << file << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -260,8 +330,8 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_read{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
-	trace() << "<- leaving mgridfs_read" << endl;
+	trace() << "-> requested mgridfs_read{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -274,8 +344,8 @@ int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_write{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
-	trace() << "<- leaving mgridfs_write" << endl;
+	trace() << "-> requested mgridfs_write{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -303,8 +373,8 @@ int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_flush{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_flush" << endl;
+	trace() << "-> requested mgridfs_flush{file: " << file << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -323,8 +393,8 @@ int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_release{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_release" << endl;
+	trace() << "-> requested mgridfs_release{file: " << file << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -336,44 +406,42 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_fsync(const char *file, int param, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_fsync{file: " << file << ", param: " << param << "}" << endl;
-	trace() << "<- leaving mgridfs_fsync" << endl;
+	trace() << "-> requested mgridfs_fsync{file: " << file << ", param: " << param << "}" << endl;
+
 	return -ENOTSUP;
 }
 
 /** Set extended attributes */
 int mgridfs::mgridfs_setxattr(const char *file, const char *name, const char *value, size_t len, int flags) {
-	trace() << "-> entering mgridfs_setxattr{file: " << file << ", name: " << name << ", len: " << len << "}" << endl;
+	trace() << "-> requested mgridfs_setxattr{file: " << file << ", name: " << name << ", len: " << len << "}" << endl;
 	//TODO: change the implementation
-	trace() << "<- leaving mgridfs_setxattr" << endl;
 	return 0;
 }
 
 /** Get extended attributes */
 int mgridfs::mgridfs_getxattr(const char *file, const char *name, char *value, size_t len) {
-	trace() << "-> entering mgridfs_getxattr{file: " << file << ", name: " << name << ", len: " << len << "}" << endl;
+	trace() << "-> requested mgridfs_getxattr{file: " << file << ", name: " << name << ", len: " << len << "}" << endl;
 	//TODO: change the implementation
 	if (len > 0) {
 		value[0] = '\0';
 	}
-	trace() << "<- leaving mgridfs_getxattr" << endl;
 	return 0;
 }
 
 /** List extended attributes */
 int mgridfs::mgridfs_listxattr(const char *file, char *buffer, size_t len) {
-	trace() << "-> entering mgridfs_listxattr{file: " << file << ", buflen: " << len << "}" << endl;
+	trace() << "-> requested mgridfs_listxattr{file: " << file << ", buflen: " << len << "}" << endl;
 	//TODO: change the implementation
 	// for now, do nothing and don't support any additional attributes
-	
-	buffer[0] = '\0';
-	trace() << "<- leaving mgridfs_listxattr" << endl;
+	if (len > 0) {
+		buffer[0] = '\0';
+	}
 	return 0;
 }
 
 /** Remove extended attributes */
 int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
-	trace() << "-> entering mgridfs_removexattr{file: " << file << ", attr: " << attr << "}" << endl;
+	trace() << "-> requested mgridfs_removexattr{file: " << file << ", attr: " << attr << "}" << endl;
 	if (globalFSOptions._metadataKeyMap.left.find(attr) == globalFSOptions._metadataKeyMap.left.end()) {
 		// It is not one of the core attributes of thr GridFS file and will go under metadata.xattr object
 		string xAttr = METADATA_XATTR_PREFIX + attr;
@@ -383,7 +451,6 @@ int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
 	}
 
 	// for now, do nothing and don't support any additional attributes
-	trace() << "<- leaving mgridfs_removexattr" << endl;
 	return 0;
 }
 
@@ -400,8 +467,8 @@ int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_create(const char *file, mode_t mode, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_create{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
-	trace() << "<- leaving mgridfs_create" << endl;
+	trace() << "-> requested mgridfs_create{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -418,8 +485,8 @@ int mgridfs::mgridfs_create(const char *file, mode_t mode, struct fuse_file_info
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_ftruncate{file: " << file << ", offset: " << offset << "}" << endl;
-	trace() << "<- leaving mgridfs_ftruncate" << endl;
+	trace() << "-> requested mgridfs_ftruncate{file: " << file << ", offset: " << offset << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -456,8 +523,8 @@ int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_
  * Introduced in version 2.6
  */
 int mgridfs::mgridfs_lock(const char *path, struct fuse_file_info *ffinfo, int cmd, struct flock *fl) {
-	trace() << "-> entering mgridfs_lock{file: " << path << ", cmd: " << cmd << "}" << endl;
-	trace() << "<- leaving mgridfs_lock" << endl;
+	trace() << "-> requested mgridfs_lock{file: " << path << ", cmd: " << cmd << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -473,8 +540,8 @@ int mgridfs::mgridfs_lock(const char *path, struct fuse_file_info *ffinfo, int c
  * Introduced in version 2.6
  */
 int mgridfs::mgridfs_utimens(const char *file, const struct timespec tv[2]) {
-	trace() << "-> entering mgridfs_utimens{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_utimens" << endl;
+	trace() << "-> requested mgridfs_utimens{file: " << file << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -487,9 +554,9 @@ int mgridfs::mgridfs_utimens(const char *file, const struct timespec tv[2]) {
  * Introduced in version 2.6
  */
 int mgridfs::mgridfs_bmap(const char *file, size_t blocksize, uint64_t *idx) {
-	trace() << "-> entering mgridfs_bmap{file: " << file << ", blocksize: " << blocksize << "}" << endl;
-	warn() << "not a block device, bmap() is not supported." << endl;
-	trace() << "<- leaving mgridfs_bmap" << endl;
+	trace() << "-> requested mgridfs_bmap{file: " << file << ", blocksize: " << blocksize << "}" << endl;
+
+	warn() << "Not a block device, bmap() is not supported." << endl;
 	return -ENOTSUP;
 }
 
@@ -506,8 +573,8 @@ int mgridfs::mgridfs_bmap(const char *file, size_t blocksize, uint64_t *idx) {
  * Introduced in version 2.8
  */
 int mgridfs::mgridfs_ioctl(const char *file, int cmd, void *arg, struct fuse_file_info *ffinfo, unsigned int flags, void *data) {
-	trace() << "-> entering mgridfs_ioctl{file: " << file << ", cmd: " << cmd << "flags: " << flags << "}" << endl;
-	trace() << "<- leaving mgridfs_ioctl" << endl;
+	trace() << "-> requested mgridfs_ioctl{file: " << file << ", cmd: " << cmd << "flags: " << flags << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -529,8 +596,8 @@ int mgridfs::mgridfs_ioctl(const char *file, int cmd, void *arg, struct fuse_fil
  * Introduced in version 2.8
  */
 int mgridfs::mgridfs_poll(const char *file, struct fuse_file_info *ffinfo, struct fuse_pollhandle *ph, unsigned *reventsp) {
-	trace() << "-> entering mgridfs_poll{file: " << file << "}" << endl;
-	trace() << "<- leaving mgridfs_poll" << endl;
+	trace() << "-> requested mgridfs_poll{file: " << file << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -543,8 +610,8 @@ int mgridfs::mgridfs_poll(const char *file, struct fuse_file_info *ffinfo, struc
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_write_buf{file: " << file << ", offset: " << off << "}" << endl;
-	trace() << "<- leaving mgridfs_write_buf" << endl;
+	trace() << "-> requested mgridfs_write_buf{file: " << file << ", offset: " << off << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -565,8 +632,8 @@ int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t 
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_t size, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_read_buf{file: " << file << ", size: " << size << ", offset: " << offset << "}" << endl;
-	trace() << "<- leaving mgridfs_read_buf" << endl;
+	trace() << "-> requested mgridfs_read_buf{file: " << file << ", size: " << size << ", offset: " << offset << "}" << endl;
+
 	return -ENOTSUP;
 }
 /**
@@ -590,8 +657,8 @@ int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_flock(const char *file, struct fuse_file_info *ffinfo, int op) {
-	trace() << "-> entering mgridfs_flock{file: " << file << ", op: " << op << "}" << endl;
-	trace() << "<- leaving mgridfs_flock" << endl;
+	trace() << "-> requested mgridfs_flock{file: " << file << ", op: " << op << "}" << endl;
+
 	return -ENOTSUP;
 }
 
@@ -606,8 +673,8 @@ int mgridfs::mgridfs_flock(const char *file, struct fuse_file_info *ffinfo, int 
  * Introduced in version 2.9.1
  */
 int mgridfs::mgridfs_fallocate(const char *file, int mode, off_t offset, off_t len, struct fuse_file_info *ffinfo) {
-	trace() << "-> entering mgridfs_fallocate{file: " << file << ", mode: " << std::oct << mode << ", offset: " << offset 
+	trace() << "-> requested mgridfs_fallocate{file: " << file << ", mode: " << std::oct << mode << ", offset: " << offset 
 			<< ", len: " << len << "}" << endl;
-	trace() << "<- leaving mgridfs_fallocate" << endl;
+
 	return -ENOTSUP;
 }
