@@ -19,8 +19,6 @@ namespace {
 }
 
 int main(int argc, char* argv[], char* arge[]) {
-	std::cout << "MongoDB-GridFS" << std::endl;
-
 	// File-system meta / setup / cleanup functions
 	mgridfsOps.init = mgridfs::mgridfs_init;
 	mgridfsOps.destroy = mgridfs::mgridfs_destroy;
@@ -77,7 +75,7 @@ int main(int argc, char* argv[], char* arge[]) {
 
 	struct fuse_args fuseArgs = FUSE_ARGS_INIT(argc, argv);
 	if (!mgridfs::globalFSOptions.fromCommandLine(fuseArgs)) {
-		std::cerr << "ERROR: Failed to parse options passed to program, will not mount file system" << std::endl;
+		fatal() << "Failed to parse options passed to program, will not mount file system" << std::endl;
 		return 1;
 	}
 
