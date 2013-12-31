@@ -2,6 +2,7 @@
 #include "fs_options.h"
 #include "fs_logger.h"
 #include "utils.h"
+#include "local_gridfs.h"
 
 #include <string.h>
 #include <errno.h>
@@ -26,7 +27,7 @@ namespace {
  * mount option is given.
  */
 int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
-	trace() << "-> requested mgridfs_getattr{" << file << "}" << endl;
+	trace() << "-> requested mgridfs_getattr{file: " << file << "}" << endl;
 	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
 	if (!pConn) {
 		error() << "Encountered null client connection value, will return error" << endl;
@@ -292,7 +293,7 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
 		return -ENOENT;
 	}
 
-	return -ENOTSUP;
+	return 0;
 }
 
 /** File open operation
@@ -313,9 +314,33 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_open{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_open{file: " << file << ", flags: " << ffinfo->flags << "}" << endl;
 
-	return -ENOTSUP;
+	// First check if this is one of the local files being written currently
+	// If so, it can be opened in read / write modes
+	// TODO: check for handling additional modes likes truncate / append etc
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(file);
+	if (localGridFile) {
+		ffinfo->fh = localGridFile->getFH();
+		return 0;
+	}
+
+	// For now, support in basic read-only mode to get started
+	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
+		fuse_context* fuseContext = fuse_get_context();
+		DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+
+		GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(file);
+		if (gridFile.exists()) {
+			return 0;
+		}
+
+		return -ENOENT;
+	}
+
+	//TODO: Support files in read/write mode as well for existing files in the GridFS
+	return -EACCES;
 }
 
 /** Read data from an open file
@@ -466,10 +491,38 @@ int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
  *
  * Introduced in version 2.5
  */
-int mgridfs::mgridfs_create(const char *file, mode_t mode, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_create{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
+int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_info *ffinfo) {
+	trace() << "-> requested mgridfs_create{file: " << file << ", mode: " << std::oct << fileMode << "}" << endl;
+	fileMode |= S_IFREG;
 
-	return -ENOTSUP;
+	fuse_context* fuseContext = fuse_get_context();
+	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+	if (!pConn) {
+		error() << "Encountered null client connection value, will return error" << endl;
+		return -EFAULT;
+	}
+
+	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
+	BSONObj fileObj = gridFS.storeFile("", 0, file);
+	if (!fileObj.isValid()) {
+		warn() << "Failed to create file for {path: " << file << "}" << std::endl;
+		return -EBADF;
+	}
+
+	//TODO:
+	trace() << "File System created object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
+			<< "}" << std::endl;
+	BSONElement fileObjId = fileObj.getField("_id");
+
+	pConn->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
+			<< "metadata.filename" << mgridfs::getPathBasename(file)
+			<< "metadata.directory" << mgridfs::getPathDirname(file)
+			<< "metadata.lastUpdated" << jsTime()
+			<< "metadata.uid" << fuseContext->uid
+			<< "metadata.gid" << fuseContext->gid
+			<< "metadata.mode" << fileMode)));
+
+	return 0;
 }
 
 /**
@@ -542,7 +595,15 @@ int mgridfs::mgridfs_lock(const char *path, struct fuse_file_info *ffinfo, int c
 int mgridfs::mgridfs_utimens(const char *file, const struct timespec tv[2]) {
 	trace() << "-> requested mgridfs_utimens{file: " << file << "}" << endl;
 
-	return -ENOTSUP;
+	struct utimbuf tm = {};
+	if (!tv[1].tv_sec) {
+		tm.actime = tv[0].tv_sec;
+		tm.modtime = tv[1].tv_sec;
+	} else {
+		tm.actime = tm.modtime = time(NULL);
+	}
+
+	return mgridfs_utime(file, &tm);
 }
 
 /**
