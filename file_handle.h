@@ -8,9 +8,10 @@ using namespace std;
 
 namespace mgridfs {
 
-class FileHandle{
+class FileHandle {
 public:
 	FileHandle(const string& path);
+	FileHandle(uint64_t fh);
 	~FileHandle();
 
 	bool isValid() const;
@@ -18,6 +19,9 @@ public:
 	bool unassignHandle();
 
 	uint64_t getHandle() const;
+	const string& getFilename() const {
+		return _filename;
+	}
 
 private:
 	typedef boost::bimap<uint64_t, string> FileHandleMap;
