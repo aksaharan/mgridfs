@@ -10,10 +10,6 @@
 
 using namespace mgridfs;
 
-namespace mgridfs {
-	FSOptions globalFSOptions;
-}
-
 namespace {
 	struct fuse_operations mgridfsOps = {};
 }

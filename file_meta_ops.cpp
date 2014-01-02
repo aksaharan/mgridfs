@@ -2,6 +2,7 @@
 #include "fs_options.h"
 #include "fs_logger.h"
 #include "utils.h"
+#include "file_handle.h"
 #include "local_gridfs.h"
 
 #include <string.h>
@@ -93,11 +94,14 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_fgetattr(const char *file, struct stat *stats, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_fgetattr{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_fgetattr{file: " << file << ", fh: " << ffinfo->fh << "}" << endl;
 
-	int retValue = mgridfs_getattr(file, stats);
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
 
-	return retValue;
+	return mgridfs_getattr(fileHandle.getFilename().c_str(), stats);
 }
 
 /** Create a file node
@@ -314,7 +318,7 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_open{file: " << file << ", flags: " << ffinfo->flags << "}" << endl;
+	trace() << "-> requested mgridfs_open{file: " << file << ", fh: " << ffinfo->fh << ", flags: " << ffinfo->flags << "}" << endl;
 
 	// First check if this is one of the local files being written currently
 	// If so, it can be opened in read / write modes
@@ -332,11 +336,18 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 
 		GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
 		GridFile gridFile = gridFS.findFile(file);
-		if (gridFile.exists()) {
-			return 0;
+		if (!gridFile.exists()) {
+			return -ENOENT;
 		}
 
-		return -ENOENT;
+		FileHandle fileHandle(file, 0);
+		ffinfo->fh = fileHandle.assignHandle();
+		if (!ffinfo->fh) {
+			// Failed to generate a file handle, most likely out of resource
+			return -EMFILE;
+		}
+
+		return 0;
 	}
 
 	//TODO: Support files in read/write mode as well for existing files in the GridFS
@@ -355,7 +366,7 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_read{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_read{file: " << file << ", fh: " << ffinfo->fh << ", len: " << len << ", offset: " << offset << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -369,7 +380,7 @@ int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_write{file: " << file << ", len: " << len << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_write{file: " << file << ", fh: " << ffinfo->fh << ", len: " << len << ", offset: " << offset << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -398,9 +409,21 @@ int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_flush{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_flush{file: " << file << ", fh: " << ffinfo->fh << "}" << endl;
 
-	return -ENOTSUP;
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
+	// If readonly mode file, this does not need to be flushed to the database and can be ignored safely
+	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
+		// Unassign the handle before returning
+		fileHandle.unassignHandle();
+		return 0;
+	}
+
+	return -EACCES;
 }
 
 /** Release an open file
@@ -418,7 +441,7 @@ int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_release{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_release{file: " << file << ", fh: " << ffinfo->fh << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -431,7 +454,7 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
  * Changed in version 2.2
  */
 int mgridfs::mgridfs_fsync(const char *file, int param, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_fsync{file: " << file << ", param: " << param << "}" << endl;
+	trace() << "-> requested mgridfs_fsync{file: " << file << ", fh: " << ffinfo->fh << ", param: " << param << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -492,7 +515,7 @@ int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_create{file: " << file << ", mode: " << std::oct << fileMode << "}" << endl;
+	trace() << "-> requested mgridfs_create{file: " << file << ", fh: " << ffinfo->fh << ", mode: " << std::oct << fileMode << "}" << endl;
 	fileMode |= S_IFREG;
 
 	fuse_context* fuseContext = fuse_get_context();
@@ -538,7 +561,7 @@ int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_
  * Introduced in version 2.5
  */
 int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_ftruncate{file: " << file << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_ftruncate{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << offset << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -576,7 +599,7 @@ int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_
  * Introduced in version 2.6
  */
 int mgridfs::mgridfs_lock(const char *path, struct fuse_file_info *ffinfo, int cmd, struct flock *fl) {
-	trace() << "-> requested mgridfs_lock{file: " << path << ", cmd: " << cmd << "}" << endl;
+	trace() << "-> requested mgridfs_lock{file: " << path << ", fh: " << ffinfo->fh << ", cmd: " << cmd << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -634,7 +657,7 @@ int mgridfs::mgridfs_bmap(const char *file, size_t blocksize, uint64_t *idx) {
  * Introduced in version 2.8
  */
 int mgridfs::mgridfs_ioctl(const char *file, int cmd, void *arg, struct fuse_file_info *ffinfo, unsigned int flags, void *data) {
-	trace() << "-> requested mgridfs_ioctl{file: " << file << ", cmd: " << cmd << "flags: " << flags << "}" << endl;
+	trace() << "-> requested mgridfs_ioctl{file: " << file << ", fh: " << ffinfo->fh << ", cmd: " << cmd << "flags: " << flags << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -657,7 +680,7 @@ int mgridfs::mgridfs_ioctl(const char *file, int cmd, void *arg, struct fuse_fil
  * Introduced in version 2.8
  */
 int mgridfs::mgridfs_poll(const char *file, struct fuse_file_info *ffinfo, struct fuse_pollhandle *ph, unsigned *reventsp) {
-	trace() << "-> requested mgridfs_poll{file: " << file << "}" << endl;
+	trace() << "-> requested mgridfs_poll{file: " << file << ", fh: " << ffinfo->fh << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -671,7 +694,7 @@ int mgridfs::mgridfs_poll(const char *file, struct fuse_file_info *ffinfo, struc
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_write_buf{file: " << file << ", offset: " << off << "}" << endl;
+	trace() << "-> requested mgridfs_write_buf{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << off << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -693,7 +716,8 @@ int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t 
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_t size, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_read_buf{file: " << file << ", size: " << size << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_read_buf{file: " << file << ", fh: " << ffinfo->fh << ", size: " << size 
+			<< ", offset: " << offset << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -718,7 +742,7 @@ int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_
  * Introduced in version 2.9
  */
 int mgridfs::mgridfs_flock(const char *file, struct fuse_file_info *ffinfo, int op) {
-	trace() << "-> requested mgridfs_flock{file: " << file << ", op: " << op << "}" << endl;
+	trace() << "-> requested mgridfs_flock{file: " << file << ", fh: " << ffinfo->fh << ", op: " << op << "}" << endl;
 
 	return -ENOTSUP;
 }
@@ -734,8 +758,8 @@ int mgridfs::mgridfs_flock(const char *file, struct fuse_file_info *ffinfo, int 
  * Introduced in version 2.9.1
  */
 int mgridfs::mgridfs_fallocate(const char *file, int mode, off_t offset, off_t len, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_fallocate{file: " << file << ", mode: " << std::oct << mode << ", offset: " << offset 
-			<< ", len: " << len << "}" << endl;
+	trace() << "-> requested mgridfs_fallocate{file: " << file << ", fh: " << ffinfo->fh << ", mode: " << std::oct << mode 
+			<< ", offset: " << offset << ", len: " << len << "}" << endl;
 
 	return -ENOTSUP;
 }

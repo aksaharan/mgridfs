@@ -10,8 +10,18 @@ namespace {
 
 mgridfs::FileHandle::FileHandleMap mgridfs::FileHandle::_fileHandles;
 
-mgridfs::FileHandle::FileHandle(const string& path)
-	: _filename(path) {
+mgridfs::FileHandle::FileHandle(const string& path, uint64_t fh)
+	: _filename(path), _fh(fh) {
+
+	if (_fh) {
+		FileHandleMap::left_map::const_iterator pIt = _fileHandles.left.find(_fh);
+		if (pIt == _fileHandles.left.end()) {
+			// Failed to find file for the corresponding file handle in the list of open files handles
+			_filename = "";
+		} else {
+			_filename = pIt->second;
+		}
+	}
 }
 
 mgridfs::FileHandle::~FileHandle() {
@@ -19,7 +29,7 @@ mgridfs::FileHandle::~FileHandle() {
 }
 
 bool mgridfs::FileHandle::isValid() const {
-	return (_fileHandles.right.find(_filename) != _fileHandles.right.end());
+	return (_fileHandles.left.find(_fh) != _fileHandles.left.end());
 }
 
 uint64_t mgridfs::FileHandle::assignHandle() {
@@ -28,37 +38,24 @@ uint64_t mgridfs::FileHandle::assignHandle() {
 		return 0;
 	}
 
-	uint64_t handle = getHandle();
-	if (handle) {
-		// Handle is already assigned to this file, just return success in this case
-		return handle;
+	// There is no way for the function to know if duplicate assign is being made to generate a file
+	// handle. It is caller's flow responsibility to call assign / unassign in the correct
+	// order functionally and to manage the associated resource (file handle is one of system resource)
+	// correctly.
+	_fh = generateNextHandle(_filename);
+	if (_fh) {
+		_fileHandles.insert(FileHandleMap::value_type(_fh, _filename));
+		debug() << "Active file handle tracking {op: assignHandle, count: " << _fileHandles.size() << "}" << endl;
 	}
-
-	handle = generateNextHandle(_filename);
-	if (!handle) {
-		return 0;
-	}
-
-	_fileHandles.insert(FileHandleMap::value_type(handle, _filename));
-	trace() << "Active file handle tracking {op: assignHandle, count: " << _fileHandles.size() << "}" << endl;
-	return handle;
+	return _fh;
 }
 
 bool mgridfs::FileHandle::unassignHandle() {
-	uint64_t handle = getHandle();
-	if (handle) {
-		_fileHandles.erase(FileHandleMap::value_type(handle, _filename));
+	if (_fh) {
+		_fileHandles.erase(FileHandleMap::value_type(_fh, _filename));
 	}
-	trace() << "Active file handle tracking {op: unassignHandle, count: " << _fileHandles.size() << "}" << endl;
+	debug() << "Active file handle tracking {op: unassignHandle, count: " << _fileHandles.size() << "}" << endl;
 	return true;
-}
-
-uint64_t mgridfs::FileHandle::getHandle() const {
-	FileHandleMap::right_map::const_iterator pIt = _fileHandles.right.find(_filename);
-	if (pIt == _fileHandles.right.end()) {
-		return 0;
-	}
-	return pIt->second;
 }
 
 uint64_t mgridfs::FileHandle::generateNextHandle(const string& filename) {

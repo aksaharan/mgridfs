@@ -106,7 +106,7 @@ int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
 		return -ENOTDIR;
 	}
 
-	FileHandle fileHandle(path);
+	FileHandle fileHandle(path, 0);
 	ffinfo->fh = fileHandle.assignHandle();
 	if (!ffinfo->fh) {
 		return -ENFILE;
@@ -137,7 +137,13 @@ int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ffdir, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_readdir{dir: " << path << ", offset: " << offset << "}" << endl;
+	trace() << "-> requested mgridfs_readdir{dir: " << path << ", fh: " << ffinfo->fh << ", offset: " << offset << "}" << endl;
+
+	// Check for file handle for validity
+	FileHandle fileHandle(path, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
 
 	// Add meta directory links
 	ffdir(dirlist, ".", NULL, 0);
@@ -180,11 +186,15 @@ int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ff
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_releasedir(const char *path, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_releasedir{dir: " << path << "}" << endl;
+	trace() << "-> requested mgridfs_releasedir{dir: " << path << ", fh: " << ffinfo->fh << "}" << endl;
 
-	FileHandle fileHandle(path);
+	// Check file handle
+	FileHandle fileHandle(path, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
 	fileHandle.unassignHandle();
-
 	return 0;
 }
 
@@ -196,7 +206,7 @@ int mgridfs::mgridfs_releasedir(const char *path, struct fuse_file_info *ffinfo)
  * Introduced in version 2.3
  */
 int mgridfs::mgridfs_fsyncdir(const char *path, int param, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_fsyncdir{dir: " << path << ", param: " << param << "}" << endl;
+	trace() << "-> requested mgridfs_fsyncdir{dir: " << path << ", fh: " << ffinfo->fh << ", param: " << param << "}" << endl;
 	//TODO: find out more about this call and implement appropriately
 	return -EACCES;
 }

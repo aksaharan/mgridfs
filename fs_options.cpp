@@ -89,6 +89,11 @@ int fuseOptionCallback(void* data, const char* arg, int key, struct fuse_args* o
 } // End of Anonymous space
 
 
+// Define global instance of the options object
+namespace mgridfs {
+	FSOptions globalFSOptions;
+}
+
 // Define version number
 const unsigned int mgridfs::MGRIDFS_MAJOR_VERSION = 0;
 const unsigned int mgridfs::MGRIDFS_MINOR_VERSION = 1;
