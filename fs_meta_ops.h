@@ -11,7 +11,7 @@ namespace mgridfs {
  * This is a non-fuse method to pre-load or create the initial directory on mount.
  * This would allow us to error out before suceeding mount if there are any issues.
  */
-bool mgridfs_load_or_create_root();
+int mgridfs_load_or_create_root();
 
 /**
  * Initialize filesystem

@@ -8,31 +8,38 @@
 
 #include <iostream>
 
-bool mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& path, mode_t dirMode, uid_t dirUid, gid_t dirGid) {
+//TODO: change tyo integer return value for appropriate error code return value
+int mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& path, mode_t dirMode, uid_t dirUid, gid_t dirGid) {
 	trace() << "-> requested mgridfs_create_directory{dir: " << path << ", mode: " << dirMode
 			<< ", uid: " << dirUid << ", gid: " << dirGid << "}" << std::endl;
 	dirMode |= S_IFDIR;
 
-	GridFS gridFS(dbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	BSONObj fileObj = gridFS.storeFile("", 0, path);
-	if (!fileObj.isValid()) {
-		error() << "Failed to create a directory for {path: " << path << "}" << std::endl;
-		return false;
+	try {
+		GridFS gridFS(dbc, globalFSOptions._db, globalFSOptions._collPrefix);
+		BSONObj fileObj = gridFS.storeFile("", 0, path);
+		if (!fileObj.isValid()) {
+			error() << "Failed to create a directory for {path: " << path << "}" << std::endl;
+			return -ENOENT;
+		}
+
+		trace() << "File System created object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
+			<< "}" << std::endl;
+		BSONElement fileObjId = fileObj.getField("_id");
+
+		dbc.update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
+						<< "metadata.filename" << mgridfs::getPathBasename(path)
+						<< "metadata.directory" << mgridfs::getPathDirname(path)
+						<< "metadata.lastUpdated" << jsTime()
+						<< "metadata.uid" << dirUid
+						<< "metadata.gid" << dirGid
+						<< "metadata.mode" << dirMode)));
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
-	trace() << "File System created object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
-			<< "}" << std::endl;
-	BSONElement fileObjId = fileObj.getField("_id");
-
-	dbc.update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
-			<< "metadata.filename" << mgridfs::getPathBasename(path)
-			<< "metadata.directory" << mgridfs::getPathDirname(path)
-			<< "metadata.lastUpdated" << jsTime()
-			<< "metadata.uid" << dirUid
-			<< "metadata.gid" << dirGid
-			<< "metadata.mode" << dirMode)));
-
-	return true;
+	return 0;
 }
 
 /** Create a directory 
@@ -44,10 +51,16 @@ bool mgridfs::mgridfs_create_directory(DBClientBase& dbc, const std::string& pat
 int mgridfs::mgridfs_mkdir(const char *path, mode_t mode) {
 	trace() << "-> requested mgridfs_mkdir{dir: " << path << ", mode: " << std::oct << mode << "}" << endl;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-	if (!mgridfs_create_directory(*pDbc, path, mode, fuseContext->uid, fuseContext->gid)) {
-		return -EACCES;
+	try {
+		fuse_context* fuseContext = fuse_get_context();
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		int retValue = mgridfs_create_directory(dbc.conn(), path, mode, fuseContext->uid, fuseContext->gid);
+		dbc.done();
+		return retValue;
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -57,19 +70,25 @@ int mgridfs::mgridfs_mkdir(const char *path, mode_t mode) {
 int mgridfs::mgridfs_rmdir(const char *path) {
 	trace() << "-> requested mgridfs_rmdir{dir: " << path << "}" << endl;
 
-	// First check if there are any files under the directory and bail out if any 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-	auto_ptr<DBClientCursor> pCursor = pDbc->query(globalFSOptions._filesNS, BSON("metadata.directory" << path));
-	if (pCursor->more()) {
-		// There are entries under this directory and it cannot be deleted
-		trace() << "Found entries for specified directory." << endl;
-		return -ENOTEMPTY;
-	}
-	pCursor.reset(NULL); // Let the system free up the cursor held by this auto_ptr
+	try {
+		// First check if there are any files under the directory and bail out if any 
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		auto_ptr<DBClientCursor> pCursor = dbc->query(globalFSOptions._filesNS, BSON("metadata.directory" << path));
+		if (pCursor->more()) {
+			// There are entries under this directory and it cannot be deleted
+			trace() << "Found entries for specified directory." << endl;
+			return -ENOTEMPTY;
+		}
+		pCursor.reset(NULL); // Let the system free up the cursor held by this auto_ptr
 
-	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	gridFS.removeFile(path);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		gridFS.removeFile(path);
+		dbc.done();
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
 
 	return 0;
 }
@@ -87,23 +106,31 @@ int mgridfs::mgridfs_rmdir(const char *path) {
 int mgridfs::mgridfs_opendir(const char *path, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_opendir{dir: " << path << "}" << endl;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
 
-	//TODO: Possible change the query to be only on the fs.files instead of doing
-	//a GridFile query that may be expensive in case on calls for large files with
-	//incorrect directory check causing DoS kind of scenario
-	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	GridFile gridFile = gridFS.findFile(path);
-	if (!gridFile.exists()) {
-		debug() << "directory not found {path: " << path << "}" << endl;
-		return -ENOENT;
-	}
+		//TODO: Possible change the query to be only on the fs.files instead of doing
+		//a GridFile query that may be expensive in case on calls for large files with
+		//incorrect directory check causing DoS kind of scenario
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(path);
+		dbc.done();
 
-	BSONObj fileMeta = gridFile.getMetadata();
-	int mode = fileMeta.getIntField("mode");
-	if (!S_ISDIR(mode)) {
-		return -ENOTDIR;
+		if (!gridFile.exists()) {
+			debug() << "directory not found {path: " << path << "}" << endl;
+			return -ENOENT;
+		}
+
+		BSONObj fileMeta = gridFile.getMetadata();
+		int mode = fileMeta.getIntField("mode");
+		if (!S_ISDIR(mode)) {
+			return -ENOTDIR;
+		}
+
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	FileHandle fileHandle(path, 0);
@@ -149,30 +176,37 @@ int mgridfs::mgridfs_readdir(const char *path, void *dirlist, fuse_fill_dir_t ff
 	ffdir(dirlist, ".", NULL, 0);
 	ffdir(dirlist, "..", NULL, 0);
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
 
-	//TODO: Possible change the query to be only on the fs.files instead of doing
-	//a GridFile query that may be expensive in case on calls for large files with
-	//incorrect directory check causing DoS kind of scenario
-	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	auto_ptr<DBClientCursor> cursor = gridFS.list(BSON("metadata.directory" << path));
-	while (cursor->more()) {
-		// Catch for the AssertionException
-		try {
-			BSONObj obj = cursor->nextSafe();
-			BSONElement elem = obj.getFieldDotted("metadata.filename");
-			trace() << "iterating for directory {file: " << obj.getStringField("filename") << ", metadata.filename: "
+		//TODO: Possible change the query to be only on the fs.files instead of doing
+		//a GridFile query that may be expensive in case on calls for large files with
+		//incorrect directory check causing DoS kind of scenario
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		auto_ptr<DBClientCursor> cursor = gridFS.list(BSON("metadata.directory" << path));
+		while (cursor->more()) {
+			// Catch for the AssertionException
+			try {
+				BSONObj obj = cursor->nextSafe();
+				BSONElement elem = obj.getFieldDotted("metadata.filename");
+				trace() << "iterating for directory {file: " << obj.getStringField("filename") << ", metadata.filename: "
 					<< elem.String() << endl;
-			if (elem.ok() && !elem.String().empty()) {
-				ffdir(dirlist, elem.String().c_str(), NULL, 0);
-			} else if (strcmp("/", path)) {
-				warn() << "Ignoring for missing metadata.filename property" << endl;
-			}
-		} catch (AssertionException& e) {
-			error() << "Encountered exception in directory listing, will continue with next entry {exception: "
+				if (elem.ok() && !elem.String().empty()) {
+					ffdir(dirlist, elem.String().c_str(), NULL, 0);
+				} else if (strcmp("/", path)) {
+					warn() << "Ignoring for missing metadata.filename property" << endl;
+				}
+			} catch (AssertionException& e) {
+				error() << "Encountered exception in directory listing, will continue with next entry {exception: "
 					<< e.what() << " : " << e.toString() << "}" << endl;
+			}
 		}
+
+		dbc.done();
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	// Add logic to list local not yet committed files as well in the directory

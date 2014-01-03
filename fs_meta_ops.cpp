@@ -11,41 +11,46 @@
 using namespace std;
 using namespace mongo;
 
-bool mgridfs::mgridfs_load_or_create_root() {
-	DBClientConnection dbc(true);
-	string errorMessage;
-	if (!dbc.connect(globalFSOptions._hostAndPort, errorMessage)) {
-		error() << "Failed to connect to the server {error: " << errorMessage << "}" << std::endl;
-		return false;
-	}
+int mgridfs::mgridfs_load_or_create_root() {
 
-	info() << "Connection to mongodb succeeded {ConnId: " << dbc.getConnectionId() 
-			<< ", WireVersion: {Min: " << dbc.getMinWireVersion() << ", Max: " << dbc.getMaxWireVersion() << "}"
-			<< ", IsConnected: " << dbc.isStillConnected() << ", SO-timeout: " << dbc.getSoTimeout()
-			<< ", Type: " << (long)dbc.type() << "}" << std::endl;
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
 
-	GridFS gridFS(dbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	GridFile gridFile = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
+		info() << "Connection to mongodb succeeded {ConnId: " << dbc.conn().getConnectionId() 
+			<< ", WireVersion: {Min: " << dbc.conn().getMinWireVersion() << ", Max: " << dbc.conn().getMaxWireVersion() << "}"
+			<< ", IsConnected: " << dbc.conn().isStillConnected() << ", SO-timeout: " << dbc.conn().getSoTimeout()
+			<< ", Type: " << (long)dbc.conn().type() << "}" << std::endl;
 
-	debug() << "GridFile from query {Filename: " << gridFile.getFilename() << ", metadata: " << gridFile.getMetadata() << std::endl;
-	if (!gridFile.exists()) {
-		info() << "Root directory not found for mounting, will try to create one now with following credentials: "
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
+
+		debug() << "GridFile from query {Filename: " << gridFile.getFilename() << ", metadata: " << gridFile.getMetadata() << std::endl;
+		if (!gridFile.exists()) {
+			info() << "Root directory not found for mounting, will try to create one now with following credentials: "
 				<< "{UID: " << geteuid() << ", GID: " << getegid() << ", mode: 700" << "}"
 				<< std::endl;
-		if (!mgridfs_create_directory(dbc, "/", 0700, geteuid(), getegid())) {
-			error() << "Failed to create root for the mounted filesystem in MongoDB" << std::endl;
-			return false;
-		}
+			int retValue = mgridfs_create_directory(dbc.conn(), "/", 0700, geteuid(), getegid());
+			if (retValue) {
+				error() << "Failed to create root for the mounted filesystem in MongoDB" << std::endl;
+				dbc.done();
+				return -EIO;
+			}
 
-		GridFile gridFile1 = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
-		if (!gridFile1.exists()) {
-			error() << "Tried creating and failed to create the root directory, will not proceed further with file system mount"
+			GridFile gridFile1 = gridFS.findFile(BSON("filename" << "/" << "metadata.type" << "directory"));
+			if (!gridFile1.exists()) {
+				error() << "Tried creating and failed to create the root directory, will not proceed further with file system mount"
 					<< std::endl;
-			return false;
+				dbc.done();
+				return -ENOENT;
+			}
 		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
-	return true;
+	return 0;
 }
 
 /**
@@ -57,21 +62,7 @@ bool mgridfs::mgridfs_load_or_create_root() {
  */
 void* mgridfs::mgridfs_init(struct fuse_conn_info* conn) {
 	trace() << "-> requested mgridfs_init(fuse_conn_info)" << endl;
-
-	DBClientConnection* pDbc = new DBClientConnection(true);
-	string errorMessage;
-	if (!pDbc->connect(globalFSOptions._hostAndPort, errorMessage)) {
-		fatal() << "Failed to connect to the server {error: " << errorMessage << "}. Will quit filesystem operations. "
-				<< "You may need to unmount the filesystem manually." << std::endl;
-		fuse_exit(NULL);
-	}
-
-	info() << "Connection to mongodb succeeded {ConnId: " << pDbc->getConnectionId() 
-			<< ", WireVersion: {Min: " << pDbc->getMinWireVersion() << ", Max: " << pDbc->getMaxWireVersion() << "}"
-			<< ", IsConnected: " << pDbc->isStillConnected() << ", SO-timeout: " << pDbc->getSoTimeout()
-			<< ", Type: " << (long)pDbc->type() << "}" << std::endl;
-
-	return reinterpret_cast<void*>(pDbc);
+	return NULL;
 }
 
 /**
@@ -81,8 +72,6 @@ void* mgridfs::mgridfs_init(struct fuse_conn_info* conn) {
  */
 void mgridfs::mgridfs_destroy(void* data) {
 	trace() << "-> requested mgridfs_destroy(fuse_conn_info)" << endl;
-
-	delete reinterpret_cast<DBClientConnection*>(data);
 }
 
 /** Get file system statistics
@@ -95,12 +84,19 @@ void mgridfs::mgridfs_destroy(void* data) {
 int mgridfs::mgridfs_statfs(const char *file, struct statvfs *statEntry) {
 	trace() << "-> requested mgridfs_statfs{file: " << file << "}" << endl;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-
 	BSONObj retInfo;
-	if (!pDbc->runCommand(globalFSOptions._db, BSON("dbstats" << 1), retInfo)) {
-		fatal() << "Failed to get db.stats from server " << retInfo << endl;
+
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		if (!dbc->runCommand(globalFSOptions._db, BSON("dbstats" << 1), retInfo)) {
+			fatal() << "Failed to get db.stats from server " << retInfo << endl;
+			return -EIO;
+		}
+
+		dbc.done();
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
 		return -EIO;
 	}
 

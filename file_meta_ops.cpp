@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "file_handle.h"
 #include "local_gridfs.h"
+#include "local_grid_file.h"
 
 #include <string.h>
 #include <errno.h>
@@ -29,53 +30,57 @@ namespace {
  */
 int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
 	trace() << "-> requested mgridfs_getattr{file: " << file << "}" << endl;
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
 
-	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
-	GridFile gridFile = gridFS.findFile(BSON("filename" << file));
-	if (!gridFile.exists()) {
-		debug() << "Requested file not found for attribute listing {file: " << file << "}" << endl;
-		return -ENOENT;
-	}
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(BSON("filename" << file));
+		dbc.done();
 
-	BSONObj fileMeta = gridFile.getMetadata();
-	debug() << "File Meta " << fileMeta << "... and lastUpdated: " << fileMeta.getField("lastUpdated") << endl;
-
-	bzero(file_stat, sizeof(*file_stat));
-	file_stat->st_uid = fileMeta.hasField("uid") ? fileMeta.getIntField("uid") : 1;
-	file_stat->st_gid = fileMeta.hasField("gid") ? fileMeta.getIntField("gid") : 1;
-	file_stat->st_mode = fileMeta.hasField("mode") ? fileMeta.getIntField("mode") : 0555;
-
-	file_stat->st_ctime = gridFile.getUploadDate().toTimeT();
-	if (fileMeta.hasField("lastUpdated")) {
-		file_stat->st_mtime = fileMeta.getField("lastUpdated").Date().toTimeT();
-	} else {
-		file_stat->st_mtime = file_stat->st_ctime;
-	}
-
-	file_stat->st_nlink = 1;
-	if (S_ISDIR(file_stat->st_mode)) {
-		file_stat->st_nlink++;
-		file_stat->st_size = fileMeta.objsize();
-		file_stat->st_blocks = get512BlockCount(file_stat->st_size);
-	} else if (S_ISREG(file_stat->st_mode)) {
-		file_stat->st_size = gridFile.getContentLength();
-		file_stat->st_blocks = get512BlockCount(file_stat->st_size);
-	} else if (S_ISLNK(file_stat->st_mode)) {
-		const char* targetLink = fileMeta.getStringField("target");
-		if (targetLink) {
-			file_stat->st_size = strlen(targetLink);
-			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
-		} else {
-			warn() << "Encountered a NULL target field for a link" << endl;
+		if (!gridFile.exists()) {
+			debug() << "Requested file not found for attribute listing {file: " << file << "}" << endl;
+			return -ENOENT;
 		}
-	} else {
-		warn() << "Encountered unsupported file stat mode for the entry " << gridFile.getMetadata()
+
+		BSONObj fileMeta = gridFile.getMetadata();
+		debug() << "File Meta " << fileMeta << "... and lastUpdated: " << fileMeta.getField("lastUpdated") << endl;
+
+		bzero(file_stat, sizeof(*file_stat));
+		file_stat->st_uid = fileMeta.hasField("uid") ? fileMeta.getIntField("uid") : 1;
+		file_stat->st_gid = fileMeta.hasField("gid") ? fileMeta.getIntField("gid") : 1;
+		file_stat->st_mode = fileMeta.hasField("mode") ? fileMeta.getIntField("mode") : 0555;
+
+		file_stat->st_ctime = gridFile.getUploadDate().toTimeT();
+		if (fileMeta.hasField("lastUpdated")) {
+			file_stat->st_mtime = fileMeta.getField("lastUpdated").Date().toTimeT();
+		} else {
+			file_stat->st_mtime = file_stat->st_ctime;
+		}
+
+		file_stat->st_nlink = 1;
+		if (S_ISDIR(file_stat->st_mode)) {
+			file_stat->st_nlink++;
+			file_stat->st_size = fileMeta.objsize();
+			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
+		} else if (S_ISREG(file_stat->st_mode)) {
+			file_stat->st_size = gridFile.getContentLength();
+			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
+		} else if (S_ISLNK(file_stat->st_mode)) {
+			const char* targetLink = fileMeta.getStringField("target");
+			if (targetLink) {
+				file_stat->st_size = strlen(targetLink);
+				file_stat->st_blocks = get512BlockCount(file_stat->st_size);
+			} else {
+				warn() << "Encountered a NULL target field for a link" << endl;
+			}
+		} else {
+			warn() << "Encountered unsupported file stat mode for the entry " << gridFile.getMetadata()
 				<< " -> {filename: " << gridFile.getFilename() << "}" << endl;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+				<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -116,7 +121,6 @@ int mgridfs::mgridfs_mknod(const char *file, mode_t mode, dev_t dev) {
 	// TODO: Implement this for some of the types like regular files / named-fifo etc.
 	// This won't be supported for any other special file / device type
 
-
 	return -ENOTSUP;
 }
 
@@ -134,27 +138,30 @@ int mgridfs::mgridfs_readlink(const char *file, char *link, size_t len) {
 		return -EINVAL;
 	}
 
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(BSON("filename" << file));
+		dbc.done();
 
-	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
-	GridFile gridFile = gridFS.findFile(BSON("filename" << file));
-	if (!gridFile.exists()) {
-		debug() << "Requested file not found for symlink listing {file: " << file << "}" << endl;
-		return -ENOENT;
-	}
+		if (!gridFile.exists()) {
+			debug() << "Requested file not found for symlink listing {file: " << file << "}" << endl;
+			return -ENOENT;
+		}
 
-	BSONObj fileMeta = gridFile.getMetadata();
-	const char* targetLink = fileMeta.getStringField("target");
-	if (targetLink) {
-		strncpy(link, targetLink, len - 1);
-		link[len - 1] = 0;
-	} else {
-		link[0] = 0;
-		warn() << "Encountered a NULL target field for a link, will return empty value" << endl;
+		BSONObj fileMeta = gridFile.getMetadata();
+		const char* targetLink = fileMeta.getStringField("target");
+		if (targetLink) {
+			strncpy(link, targetLink, len - 1);
+			link[len - 1] = 0;
+		} else {
+			link[0] = 0;
+			warn() << "Encountered a NULL target field for a link, will return empty value" << endl;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -164,10 +171,17 @@ int mgridfs::mgridfs_readlink(const char *file, char *link, size_t len) {
 int mgridfs::mgridfs_unlink(const char *file) {
 	trace() << "-> requested mgridfs_unlink{file: " << file << "}" << endl;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-	GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
-	gridFS.removeFile(file);
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		gridFS.removeFile(file);
+		dbc.done();
+
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
 
 	return 0;
 }
@@ -176,33 +190,35 @@ int mgridfs::mgridfs_unlink(const char *file) {
 int mgridfs::mgridfs_symlink(const char *srcfile, const char *destfile) {
 	trace() << "-> requested mgridfs_symlink{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
+	try {
+		fuse_context* fuseContext = fuse_get_context();
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		BSONObj fileObj = gridFS.storeFile("", 0, destfile);
+		if (!fileObj.isValid()) {
+			error() << "Failed to create link file {destfile: " << destfile << "}" << std::endl;
+			return -EIO;
+		}
 
-	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
-	BSONObj fileObj = gridFS.storeFile("", 0, destfile);
-	if (!fileObj.isValid()) {
-		error() << "Failed to create link file {destfile: " << destfile << "}" << std::endl;
-		return -EFAULT;
-	}
-
-	debug() << "File System created link object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
+		debug() << "File System created link object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
 			<< "}" << std::endl;
 
-	mode_t linkMode = S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO;
-	BSONElement fileObjId = fileObj.getField("_id");
-	pConn->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "slink"
-			<< "metadata.target" << srcfile
-			<< "metadata.filename" << mgridfs::getPathBasename(destfile)
-			<< "metadata.directory" << mgridfs::getPathDirname(destfile)
-			<< "metadata.lastUpdated" << jsTime()
-			<< "metadata.uid" << fuseContext->uid
-			<< "metadata.gid" << fuseContext->gid
-			<< "metadata.mode" << linkMode)));
+		mode_t linkMode = S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO;
+		BSONElement fileObjId = fileObj.getField("_id");
+		dbc->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "slink"
+						<< "metadata.target" << srcfile
+						<< "metadata.filename" << mgridfs::getPathBasename(destfile)
+						<< "metadata.directory" << mgridfs::getPathDirname(destfile)
+						<< "metadata.lastUpdated" << jsTime()
+						<< "metadata.uid" << fuseContext->uid
+						<< "metadata.gid" << fuseContext->gid
+						<< "metadata.mode" << linkMode)));
+		dbc.done();
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
 
 	return 0;
 }
@@ -225,18 +241,21 @@ int mgridfs::mgridfs_link(const char *srcfile, const char *destfile) {
 /** Change the permission bits of a file */
 int mgridfs::mgridfs_chmod(const char *file, mode_t mode) {
 	trace() << "-> requested mgridfs_chmod{file: " << file << ", mode: " << std::oct << mode << "}" << endl;
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		dbc->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.mode" << mode)));
+		BSONObj errorDetail = dbc->getLastErrorDetailed();
+		dbc.done();
 
-	pConn->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.mode" << mode)));
-	BSONObj errorDetail = pConn->getLastErrorDetailed();
-	int n = errorDetail.getIntField("n");
-	if (n <= 0) {
-		debug() << "Failed to chmod requested file {file: " << file << "}" << endl;
-		return -ENOENT;
+		int n = errorDetail.getIntField("n");
+		if (n <= 0) {
+			debug() << "Failed to chmod requested file {file: " << file << "}" << endl;
+			return -ENOENT;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -246,18 +265,21 @@ int mgridfs::mgridfs_chmod(const char *file, mode_t mode) {
 int mgridfs::mgridfs_chown(const char *file, uid_t uid, gid_t gid) {
 	trace() << "-> requested mgridfs_chown{file: " << file << ", uid: " << uid << ", gid: " << gid << "}" << endl;
 
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		dbc->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.uid" << uid << "metadata.gid" << gid)));
+		BSONObj errorDetail = dbc->getLastErrorDetailed();
+		dbc.done();
 
-	pConn->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.uid" << uid << "metadata.gid" << gid)));
-	BSONObj errorDetail = pConn->getLastErrorDetailed();
-	int n = errorDetail.getIntField("n");
-	if (n <= 0) {
-		debug() << "Failed to chown requested file {file: " << file << "}" << endl;
-		return -ENOENT;
+		int n = errorDetail.getIntField("n");
+		if (n <= 0) {
+			debug() << "Failed to chown requested file {file: " << file << "}" << endl;
+			return -ENOENT;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -275,11 +297,6 @@ int mgridfs::mgridfs_truncate(const char *file, off_t len) {
  */
 int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
 	trace() << "-> requested mgridfs_utime{file: " << file << "}" << endl;
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuse_get_context()->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
 
 	Date_t updateTime;
 	if (time) {
@@ -289,12 +306,21 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
 		updateTime = jsTime();
 	}
 
-	pConn->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.lastUpdated" << updateTime)));
-	BSONObj errorDetail = pConn->getLastErrorDetailed();
-	int n = errorDetail.getIntField("n");
-	if (n <= 0) {
-		debug() << "Failed to utime requested file {file: " << file << "}" << endl;
-		return -ENOENT;
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		dbc->update(globalFSOptions._filesNS, BSON("filename" << file), BSON("$set" << BSON("metadata.lastUpdated" << updateTime)));
+		BSONObj errorDetail = dbc->getLastErrorDetailed();
+		dbc.done();
+
+		int n = errorDetail.getIntField("n");
+		if (n <= 0) {
+			debug() << "Failed to utime requested file {file: " << file << "}" << endl;
+			return -ENOENT;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
 	}
 
 	return 0;
@@ -320,37 +346,50 @@ int mgridfs::mgridfs_utime(const char *file, struct utimbuf *time) {
 int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_open{file: " << file << ", fh: " << ffinfo->fh << ", flags: " << ffinfo->flags << "}" << endl;
 
+	// Assign a new file handle for this open
+	// TODO: check behaviour on the changing a read-only file descriptor to read-write descriptor
+	FileHandle fileHandle(file, 0);
+	ffinfo->fh = fileHandle.assignHandle();
+	if (!ffinfo->fh) {
+		// Failed to generate a file handle, most likely out of resource
+		return -ENFILE;
+	}
+
 	// First check if this is one of the local files being written currently
 	// If so, it can be opened in read / write modes
 	// TODO: check for handling additional modes likes truncate / append etc
 	LocalGridFile* localGridFile = LocalGridFS::get().findByName(file);
 	if (localGridFile) {
-		ffinfo->fh = localGridFile->getFH();
 		return 0;
 	}
 
 	// For now, support in basic read-only mode to get started
+	debug() << "Flags {AccessFlags: " << (ffinfo->flags & O_ACCMODE) << ", ReadOnly: " <<  ((ffinfo->flags & O_ACCMODE) & O_RDONLY)
+			<< ", AccessMask: " << O_ACCMODE << ", RDOnlyMask: " << O_RDONLY << "}";
 	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
-		fuse_context* fuseContext = fuse_get_context();
-		DBClientConnection* pDbc = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
+		try {
+			ScopedDbConnection dbc(globalFSOptions._connectString);
+			GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+			GridFile gridFile = gridFS.findFile(file);
+			dbc.done();
 
-		GridFS gridFS(*pDbc, globalFSOptions._db, globalFSOptions._collPrefix);
-		GridFile gridFile = gridFS.findFile(file);
-		if (!gridFile.exists()) {
-			return -ENOENT;
-		}
-
-		FileHandle fileHandle(file, 0);
-		ffinfo->fh = fileHandle.assignHandle();
-		if (!ffinfo->fh) {
-			// Failed to generate a file handle, most likely out of resource
-			return -EMFILE;
+			if (!gridFile.exists()) {
+				// Unassign file handle that was assigned for this instance
+				fileHandle.unassignHandle();
+				return -ENOENT;
+			}
+		} catch (DBException& e) {
+			error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+				<< ", exception: " << e.toString() << "}" << endl;
+			fileHandle.unassignHandle();
+			return -EIO;
 		}
 
 		return 0;
 	}
 
 	//TODO: Support files in read/write mode as well for existing files in the GridFS
+	fileHandle.unassignHandle();
 	return -EACCES;
 }
 
@@ -368,6 +407,45 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_read{file: " << file << ", fh: " << ffinfo->fh << ", len: " << len << ", offset: " << offset << "}" << endl;
 
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+	if (!localGridFile) {
+		return -EBADF;
+	}
+
+	return localGridFile->read(data, len, offset);
+}
+
+/** Store data from an open file in a buffer
+ *
+ * Similar to the read() method, but data is stored and
+ * returned in a generic buffer.
+ *
+ * No actual copying of data has to take place, the source
+ * file descriptor may simply be stored in the buffer for
+ * later data transfer.
+ *
+ * The buffer must be allocated dynamically and stored at the
+ * location pointed to by bufp.  If the buffer contains memory
+ * regions, they too must be allocated using malloc().  The
+ * allocated memory will be freed by the caller.
+ *
+ * Introduced in version 2.9
+ */
+int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_t size, off_t offset, struct fuse_file_info *ffinfo) {
+	//-> requested mgridfs_read_buf{file: /xxxxx.txt, fh: 51, size: 4096, offset: 0}
+	trace() << "-> requested mgridfs_read_buf{file: " << file << ", fh: " << ffinfo->fh << ", size: " << size 
+			<< ", offset: " << offset << "}" << endl;
+
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
 	return -ENOTSUP;
 }
 
@@ -381,6 +459,35 @@ int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset
  */
 int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_write{file: " << file << ", fh: " << ffinfo->fh << ", len: " << len << ", offset: " << offset << "}" << endl;
+
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+	if (!localGridFile) {
+		return -EBADF;
+	}
+
+	return localGridFile->write(data, len, offset);
+}
+
+/** Write contents of buffer to an open file
+ *
+ * Similar to the write() method, but data is supplied in a
+ * generic buffer.  Use fuse_buf_copy() to transfer data to
+ * the destination.
+ *
+ * Introduced in version 2.9
+ */
+int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *ffinfo) {
+	trace() << "-> requested mgridfs_write_buf{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << off << "}" << endl;
+
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
 
 	return -ENOTSUP;
 }
@@ -416,14 +523,19 @@ int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
 		return -EBADF;
 	}
 
-	// If readonly mode file, this does not need to be flushed to the database and can be ignored safely
+	// If read-only mode file, this does not need to be flushed to the database and can be ignored safely
 	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
-		// Unassign the handle before returning
-		fileHandle.unassignHandle();
+		//Unassign the handle before returning
+		//fileHandle.unassignHandle();
 		return 0;
 	}
 
-	return -EACCES;
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+	if (!localGridFile) {
+		return -EBADF;
+	}
+
+	return localGridFile->flush();
 }
 
 /** Release an open file
@@ -443,7 +555,23 @@ int mgridfs::mgridfs_flush(const char *file, struct fuse_file_info *ffinfo) {
 int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_release{file: " << file << ", fh: " << ffinfo->fh << "}" << endl;
 
-	return -ENOTSUP;
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (fileHandle.isValid()) {
+		// If there is still an active file handle mapping, go through all open file handles for 
+		// the specified file name and make sure all the files are released / closed
+		LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+		if (localGridFile) {
+			localGridFile->flush();
+			LocalGridFS::get().releaseFile(fileHandle.getFilename());
+		}
+
+		/*
+		// Release all handles associated with this filename
+		FileHandle::unassignAllHandles(fileHandle.getFilename());
+		*/
+	}
+
+	return 0;
 }
 
 /** Synchronize file contents
@@ -516,34 +644,55 @@ int mgridfs::mgridfs_removexattr(const char *file, const char *attr) {
  */
 int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_create{file: " << file << ", fh: " << ffinfo->fh << ", mode: " << std::oct << fileMode << "}" << endl;
+	// From man-page: creat() is equivalent to open() with flags equal to O_CREAT|O_WRONLY|O_TRUNC.
 	fileMode |= S_IFREG;
 
-	fuse_context* fuseContext = fuse_get_context();
-	DBClientConnection* pConn = reinterpret_cast<DBClientConnection*>(fuseContext->private_data);
-	if (!pConn) {
-		error() << "Encountered null client connection value, will return error" << endl;
-		return -EFAULT;
-	}
+	try {
+		fuse_context* fuseContext = fuse_get_context();
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
 
-	GridFS gridFS(*pConn, globalFSOptions._db, globalFSOptions._collPrefix);
-	BSONObj fileObj = gridFS.storeFile("", 0, file);
-	if (!fileObj.isValid()) {
-		warn() << "Failed to create file for {path: " << file << "}" << std::endl;
-		return -EBADF;
-	}
+		// Create an empty file to signify the file creation and open a local file for the same
+		BSONObj fileObj = gridFS.storeFile("", 0, file);
+		if (!fileObj.isValid()) {
+			warn() << "Failed to create file for {path: " << file << "}" << std::endl;
+			dbc.done();
+			return -EBADF;
+		}
 
-	//TODO:
-	trace() << "File System created object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
+		//TODO: Check if the file already exists both locally as well as remotely
+		trace() << "File System created object {ns: " << globalFSOptions._filesNS << ", object: " << fileObj.getOwned().toString() 
 			<< "}" << std::endl;
-	BSONElement fileObjId = fileObj.getField("_id");
+		BSONElement fileObjId = fileObj.getField("_id");
 
-	pConn->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
-			<< "metadata.filename" << mgridfs::getPathBasename(file)
-			<< "metadata.directory" << mgridfs::getPathDirname(file)
-			<< "metadata.lastUpdated" << jsTime()
-			<< "metadata.uid" << fuseContext->uid
-			<< "metadata.gid" << fuseContext->gid
-			<< "metadata.mode" << fileMode)));
+		dbc->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
+						<< "metadata.filename" << mgridfs::getPathBasename(file)
+						<< "metadata.directory" << mgridfs::getPathDirname(file)
+						<< "metadata.lastUpdated" << jsTime()
+						<< "metadata.uid" << fuseContext->uid
+						<< "metadata.gid" << fuseContext->gid
+						<< "metadata.mode" << fileMode)));
+		dbc.done();
+
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+				<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
+
+	// Now since the file is created on MongoDB GridFS, create a local cache file to represent the remote file
+	FileHandle fileHandle(file, 0);
+	ffinfo->fh = fileHandle.assignHandle();
+	if (!ffinfo->fh) {
+		// Most likely failed to generate file handle because it ran out of it.
+		return -ENFILE;
+	}
+
+	LocalGridFile* localGridFile = LocalGridFS::get().createFile(file);
+	if (!localGridFile) {
+		fileHandle.unassignHandle();
+		return -ENOMEM;
+	}
 
 	return 0;
 }
@@ -685,42 +834,6 @@ int mgridfs::mgridfs_poll(const char *file, struct fuse_file_info *ffinfo, struc
 	return -ENOTSUP;
 }
 
-/** Write contents of buffer to an open file
- *
- * Similar to the write() method, but data is supplied in a
- * generic buffer.  Use fuse_buf_copy() to transfer data to
- * the destination.
- *
- * Introduced in version 2.9
- */
-int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_write_buf{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << off << "}" << endl;
-
-	return -ENOTSUP;
-}
-
-/** Store data from an open file in a buffer
- *
- * Similar to the read() method, but data is stored and
- * returned in a generic buffer.
- *
- * No actual copying of data has to take place, the source
- * file descriptor may simply be stored in the buffer for
- * later data transfer.
- *
- * The buffer must be allocated dynamically and stored at the
- * location pointed to by bufp.  If the buffer contains memory
- * regions, they too must be allocated using malloc().  The
- * allocated memory will be freed by the caller.
- *
- * Introduced in version 2.9
- */
-int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_t size, off_t offset, struct fuse_file_info *ffinfo) {
-	trace() << "-> requested mgridfs_read_buf{file: " << file << ", fh: " << ffinfo->fh << ", size: " << size 
-			<< ", offset: " << offset << "}" << endl;
-
-	return -ENOTSUP;
-}
 /**
  * Perform BSD file locking operation
  *

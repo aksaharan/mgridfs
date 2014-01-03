@@ -58,6 +58,26 @@ bool mgridfs::FileHandle::unassignHandle() {
 	return true;
 }
 
+bool mgridfs::FileHandle::unassignAllHandles(const string& filename) {
+	vector<uint64_t> fhList;
+
+	// Since bimaps do not support erase by the iterator:
+	// 	1. Gather all the file handles for this file name
+	// 	2. Release all the handles by itertaing through list from step 1
+	for (FileHandleMap::right_map::const_iterator pIt = _fileHandles.right.find(filename);
+			pIt != _fileHandles.right.end();
+			++pIt) {
+		fhList.push_back(pIt->second);
+	}
+
+	debug() << "unsassignAllHandles {file: " << filename << ", foundToUnassign: " << fhList.size() << "}" << endl;
+	for (vector<uint64_t>::const_iterator pIt = fhList.begin(); pIt != fhList.end(); ++pIt) {
+		_fileHandles.erase(FileHandleMap::value_type(*pIt, filename));
+	}
+
+	return true;
+}
+
 uint64_t mgridfs::FileHandle::generateNextHandle(const string& filename) {
 	uint64_t origHandle = _FILE_HANDLE++;
 	for (; origHandle != _FILE_HANDLE; ++_FILE_HANDLE) {

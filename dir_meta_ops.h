@@ -15,8 +15,7 @@ using namespace mongo;
 
 namespace mgridfs {
 
-// This is an implementation
-bool mgridfs_create_directory(DBClientBase& dbc, const std::string& dirname, mode_t dirMode, uid_t dirUid, gid_t dirGid);
+int mgridfs_create_directory(DBClientBase& dbc, const std::string& dirname, mode_t dirMode, uid_t dirUid, gid_t dirGid);
 
 /** Create a directory 
  *

@@ -2,6 +2,14 @@
 
 using namespace mgridfs;
 
+map<string, LocalGridFile*> mgridfs::LocalGridFS::_localGridFileMap;
+
+LocalGridFS::LocalGridFS() {
+}
+
+LocalGridFS::~LocalGridFS() {
+}
+
 LocalGridFS& LocalGridFS::get() {
 	static LocalGridFS localGridFS;
 	return localGridFS;
@@ -11,8 +19,14 @@ LocalGridFile* LocalGridFS::findByName(const string& file) {
 	return NULL;
 }
 
-LocalGridFS::LocalGridFS() {
+LocalGridFile* LocalGridFS::createFile(const string& filename) {
+	return NULL;
 }
 
-LocalGridFS::~LocalGridFS() {
+bool LocalGridFS::releaseFile(const string& filename) {
+	return false;
+}
+
+bool LocalGridFS::releaseAllFiles(bool flushAll) {
+	return false;
 }

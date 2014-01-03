@@ -29,6 +29,7 @@ struct FSOptions {
 	string _host;
 	string _db;
 	string _collPrefix;
+	string _connectString;
 	unsigned int _port;
 
 	string _logFile;

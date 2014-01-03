@@ -34,6 +34,8 @@ public:
 		return _filename;
 	}
 
+	static bool unassignAllHandles(const string& filename);
+
 private:
 	// Since same filenames can have multiple file handles but same file handle cannot hanve multiple file
 	// association, the relation is as follows for the container:

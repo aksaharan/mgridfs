@@ -137,6 +137,10 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 		info() << "Setting mongodb collprefix -> " << _parsedFuseOptions._collPrefix << endl;
 	}
 
+	stringstream ss;
+	ss << _parsedFuseOptions._host << ":" << _parsedFuseOptions._port;
+
+	globalFSOptions._connectString = ss.str();
 	globalFSOptions._db = _parsedFuseOptions._db;
 	globalFSOptions._collPrefix = _parsedFuseOptions._collPrefix;
 	globalFSOptions._host = _parsedFuseOptions._host;
@@ -161,7 +165,7 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 			<< endl;
 
 	globalFSOptions._hostAndPort = mongo::HostAndPort(_parsedFuseOptions._host, _parsedFuseOptions._port);
-	if (!mgridfs::mgridfs_load_or_create_root()) {
+	if (mgridfs::mgridfs_load_or_create_root()) {
 		return false;
 	}
 

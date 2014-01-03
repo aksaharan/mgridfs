@@ -108,6 +108,24 @@ int mgridfs_open(const char *, struct fuse_file_info *);
  */
 int mgridfs_read(const char *, char *, size_t, off_t, struct fuse_file_info *);
 
+/** Store data from an open file in a buffer
+ *
+ * Similar to the read() method, but data is stored and
+ * returned in a generic buffer.
+ *
+ * No actual copying of data has to take place, the source
+ * file descriptor may simply be stored in the buffer for
+ * later data transfer.
+ *
+ * The buffer must be allocated dynamically and stored at the
+ * location pointed to by bufp.  If the buffer contains memory
+ * regions, they too must be allocated using malloc().  The
+ * allocated memory will be freed by the caller.
+ *
+ * Introduced in version 2.9
+ */
+int mgridfs_read_buf(const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
+
 /** Write data to an open file
  *
  * Write should return exactly the number of bytes requested
@@ -117,6 +135,17 @@ int mgridfs_read(const char *, char *, size_t, off_t, struct fuse_file_info *);
  * Changed in version 2.2
  */
 int mgridfs_write(const char *, const char *, size_t, off_t, struct fuse_file_info *);
+
+/** Write contents of buffer to an open file
+ *
+ * Similar to the write() method, but data is supplied in a
+ * generic buffer.  Use fuse_buf_copy() to transfer data to
+ * the destination.
+ *
+ * Introduced in version 2.9
+ */
+
+int mgridfs_write_buf(const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
 
 /** Possibly flush cached data
  *
@@ -298,33 +327,6 @@ int mgridfs_ioctl(const char *, int cmd, void *arg, struct fuse_file_info *, uns
  */
 int mgridfs_poll(const char *, struct fuse_file_info *, struct fuse_pollhandle *ph, unsigned *reventsp);
 
-/** Write contents of buffer to an open file
- *
- * Similar to the write() method, but data is supplied in a
- * generic buffer.  Use fuse_buf_copy() to transfer data to
- * the destination.
- *
- * Introduced in version 2.9
- */
-int mgridfs_write_buf(const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
-
-/** Store data from an open file in a buffer
- *
- * Similar to the read() method, but data is stored and
- * returned in a generic buffer.
- *
- * No actual copying of data has to take place, the source
- * file descriptor may simply be stored in the buffer for
- * later data transfer.
- *
- * The buffer must be allocated dynamically and stored at the
- * location pointed to by bufp.  If the buffer contains memory
- * regions, they too must be allocated using malloc().  The
- * allocated memory will be freed by the caller.
- *
- * Introduced in version 2.9
- */
-int mgridfs_read_buf(const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
 /**
  * Perform BSD file locking operation
  *
