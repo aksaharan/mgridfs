@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 
+#include <algorithm>
 #include <iostream>
 
 #include <mongo/client/gridfs.h>
@@ -444,24 +445,59 @@ int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset
 		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
 		GridFile gridFile = gridFS.findFile(BSON("filename" << file));
 		if (!gridFile.exists()) {
-			debug() << "Requested file not found for reading data {file: " << file << "}" << endl;
+			warn() << "Requested file not found for reading data {file: " << fileHandle.getFilename() << "}" << endl;
 			dbc.done();
 			return -EBADF;
-		} else if (offset < 0 || offset >= gridFile.getContentLength()) {
+		} else if (offset < 0 || offset >= (off_t)gridFile.getContentLength()) {
 			// TODO: Fix the offset logic
 			// EoF reached, return end-of-file 
+			trace() << "Reached end-of-file for the specified request {file: " << fileHandle.getFilename() 
+				<< ", offset: " << offset << "}" << endl;
 			dbc.done();
 			return 0;
 		}
 
 		// Else read the appropriate chunks from the server and copy into the buffer
-		int chunkSize = gridFile.getChunkSize();
-		int numChunks = gridFile.getNumChunks();
+		unsigned int chunkSize = gridFile.getChunkSize();
+		unsigned int numChunks = gridFile.getNumChunks();
 		//TODO: Implement the file offset tracking for the file
+		//
+		/*
 		off_t startOffset = (offset < 0) ? offset + len : offset;
 		off_t endOffset = (offset < 0) ? 0 : offset;
+		*/
+
+		unsigned int activeChunkNum = offset / chunkSize;
+		size_t bytesRead = 0;
+		while (bytesRead < len && activeChunkNum < numChunks) {
+			GridFSChunk activeChunk = gridFile.getChunk(activeChunkNum);
+			int bytesToRead = 0;
+			int chunkLen = 0;
+			const char* chunkData = activeChunk.data(chunkLen);
+			if (!chunkData) {
+				warn() << "Encountered NULL chunk data while reading file from remote server {activeChunkNum: " << activeChunkNum 
+					<< "}, will return IO error to the reader." << endl;
+				dbc.done();
+				return -EIO;
+			}
+
+			if (bytesRead) {
+				// If we are in-between reading data, check on what data is left to be read
+				bytesToRead = min((size_t)chunkLen, (len - bytesRead));
+				memcpy(data + bytesRead, chunkData, bytesToRead);
+			} else {
+				// This is the first chunk we are reading and could be starting from in-between offset of the
+				// chunk that was previously read partially
+				bytesToRead = min((size_t)(chunkLen - (offset % chunkSize)), (size_t)(len - bytesRead));
+				memcpy(data + bytesRead, chunkData + (offset % chunkSize), bytesToRead);
+			}
+
+			bytesRead += bytesToRead;
+			++activeChunkNum;
+		}
 
 		dbc.done();
+		return bytesRead;
 
 	} catch (DBException& e) {
 		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
