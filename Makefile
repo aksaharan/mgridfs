@@ -5,7 +5,7 @@ LDFLAGS=-L${HOME}/mongo-client-install/lib
 
 #LDOPTS=-lmongoclient -lfuse_ino64 -lboost_thread-mt -lboost_filesystem-mt -lboost_system-mt
 COMMON_OBJECTS=file_handle.o local_grid_file.o local_gridfs.o utils.o fs_options.o file_meta_ops.o fs_meta_ops.o dir_meta_ops.o \
-fs_conn_info.o fs_logger.o
+fs_logger.o
 
 TEST_OBJECTS=${COMMON_OBJECTS}
 

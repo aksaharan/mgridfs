@@ -1,5 +1,4 @@
 #include "fs_meta_ops.h"
-#include "fs_conn_info.h"
 #include "fs_options.h"
 #include "fs_logger.h"
 #include "dir_meta_ops.h"
