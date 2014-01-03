@@ -365,27 +365,41 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 
 	// For now, support in basic read-only mode to get started
 	debug() << "Flags {AccessFlags: " << (ffinfo->flags & O_ACCMODE) << ", ReadOnly: " <<  ((ffinfo->flags & O_ACCMODE) & O_RDONLY)
-			<< ", AccessMask: " << O_ACCMODE << ", RDOnlyMask: " << O_RDONLY << "}";
-	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
-		try {
-			ScopedDbConnection dbc(globalFSOptions._connectString);
-			GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
-			GridFile gridFile = gridFS.findFile(file);
-			dbc.done();
+			<< ", AccessMask: " << O_ACCMODE << ", ROMask: " << O_RDONLY << "}" << endl;
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(file);
+		dbc.done();
 
-			if (!gridFile.exists()) {
-				// Unassign file handle that was assigned for this instance
-				fileHandle.unassignHandle();
-				return -ENOENT;
-			}
-		} catch (DBException& e) {
-			error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
-				<< ", exception: " << e.toString() << "}" << endl;
+		//TODO: do error checking for local file creation
+		if (gridFile.exists() && ((ffinfo->flags & O_ACCMODE) == O_RDONLY)) {
+			// Do not need local file, read-only data should be read from the server directly until someone else on this
+			// server is writing data
+			return 0;
+		} else if (gridFile.exists() && ((ffinfo->flags & O_ACCMODE) != O_RDONLY)) {
+			// Create local file and let it open with data from the server in certain cases
+			LocalGridFile* localGridFile = LocalGridFS::get().createFile(file);
+			localGridFile->openRemote();
+		} else if (!gridFile.exists() && (ffinfo->flags & O_CREAT)) {
+			// Create remote file and open local file for the same
+			fileHandle.unassignHandle(); // Unassign the handle since a new handle will be assigned in the create call
+
+			fuse_context* fuseContext = fuse_get_context();
+			return mgridfs_create(file, fuseContext->umask, ffinfo);
+		} else {
+			// Following conditions are not met for it to be true:
+			// 	- Exists and requested in RO mode
+			// 	- Exists and requested in RW / WO mode
+			// 	- Not exists and requested to be created
 			fileHandle.unassignHandle();
-			return -EIO;
+			return -ENOENT;
 		}
-
-		return 0;
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		fileHandle.unassignHandle();
+		return -EIO;
 	}
 
 	//TODO: Support files in read/write mode as well for existing files in the GridFS
@@ -407,17 +421,55 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_read{file: " << file << ", fh: " << ffinfo->fh << ", len: " << len << ", offset: " << offset << "}" << endl;
 
+	if (len == 0) {
+		return 0;
+	}
+
 	FileHandle fileHandle(file, ffinfo->fh);
-	if (!fileHandle.isValid()) {
+	if (!fileHandle.isValid() || fileHandle.getFilename().empty()) {
 		return -EBADF;
 	}
 
 	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
-	if (!localGridFile) {
+	if (localGridFile) {
+		return localGridFile->read(data, len, offset);
+	} else if ((ffinfo->flags & O_ACCMODE) != O_RDONLY) {
+		warn() << "Local grid file not found for a read request for file opened in non-readonly mode." << endl;
 		return -EBADF;
 	}
 
-	return localGridFile->read(data, len, offset);
+	// If there is no local grid file in the scope, read appropriate data from GridFS directly and copy the same to the specified buffer
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		GridFS gridFS(dbc.conn(), globalFSOptions._db, globalFSOptions._collPrefix);
+		GridFile gridFile = gridFS.findFile(BSON("filename" << file));
+		if (!gridFile.exists()) {
+			debug() << "Requested file not found for reading data {file: " << file << "}" << endl;
+			dbc.done();
+			return -EBADF;
+		} else if (offset < 0 || offset >= gridFile.getContentLength()) {
+			// TODO: Fix the offset logic
+			// EoF reached, return end-of-file 
+			dbc.done();
+			return 0;
+		}
+
+		// Else read the appropriate chunks from the server and copy into the buffer
+		int chunkSize = gridFile.getChunkSize();
+		int numChunks = gridFile.getNumChunks();
+		//TODO: Implement the file offset tracking for the file
+		off_t startOffset = (offset < 0) ? offset + len : offset;
+		off_t endOffset = (offset < 0) ? 0 : offset;
+
+		dbc.done();
+
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+				<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
+
+	return 0;
 }
 
 /** Store data from an open file in a buffer
@@ -440,12 +492,7 @@ int mgridfs::mgridfs_read_buf(const char *file, struct fuse_bufvec **bufp, size_
 	//-> requested mgridfs_read_buf{file: /xxxxx.txt, fh: 51, size: 4096, offset: 0}
 	trace() << "-> requested mgridfs_read_buf{file: " << file << ", fh: " << ffinfo->fh << ", size: " << size 
 			<< ", offset: " << offset << "}" << endl;
-
-	FileHandle fileHandle(file, ffinfo->fh);
-	if (!fileHandle.isValid()) {
-		return -EBADF;
-	}
-
+	// mgridfs_read should be usable instead of this method
 	return -ENOTSUP;
 }
 
@@ -483,12 +530,7 @@ int mgridfs::mgridfs_write(const char *file, const char *data, size_t len, off_t
  */
 int mgridfs::mgridfs_write_buf(const char *file, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_write_buf{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << off << "}" << endl;
-
-	FileHandle fileHandle(file, ffinfo->fh);
-	if (!fileHandle.isValid()) {
-		return -EBADF;
-	}
-
+	// mgridfs_write should be usable instead of this method
 	return -ENOTSUP;
 }
 
