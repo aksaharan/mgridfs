@@ -289,7 +289,20 @@ int mgridfs::mgridfs_chown(const char *file, uid_t uid, gid_t gid) {
 /** Change the size of a file */
 int mgridfs::mgridfs_truncate(const char *file, off_t len) {
 	trace() << "-> requested mgridfs_truncate{file: " << file << ", len: " << len << "}" << endl;
-	return -ENOTSUP;
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(file);
+	if (!localGridFile) {
+		error() << "Should have found a local file for truncate operation to happen on it {file: "
+			<< file << "}" << endl;
+		return -EBADF;
+	}
+
+	if (!localGridFile->setSize(len)) {
+		error() << "Failed to set specified size for the local file {file: " << file
+			<< ", offset: " << len << "}" << endl;
+		return -EIO;
+	}
+
+	return 0;
 }
 
 /** Change the access and/or modification times of a file
@@ -381,7 +394,22 @@ int mgridfs::mgridfs_open(const char *file, struct fuse_file_info *ffinfo) {
 		} else if (gridFile.exists() && ((ffinfo->flags & O_ACCMODE) != O_RDONLY)) {
 			// Create local file and let it open with data from the server in certain cases
 			LocalGridFile* localGridFile = LocalGridFS::get().createFile(file);
-			localGridFile->openRemote();
+			if (!localGridFile) {
+				return -ENOMEM;
+			}
+
+			int retCode = localGridFile->openRemote(ffinfo->flags);
+			if (retCode != 0) {
+				LocalGridFS::get().releaseFile(file);
+				return -EIO;
+			}
+
+			if (ffinfo->flags & O_TRUNC && !localGridFile->setSize(0)) {
+				error() << "Truncate file flag enabled and failed to set local file size to 0 {filename: "
+					<< file << ", truncEnabled: " << (ffinfo->flags & O_TRUNC) << "}" << endl;
+				return -EIO;
+			}
+			return 0;
 		} else if (!gridFile.exists() && (ffinfo->flags & O_CREAT)) {
 			// Create remote file and open local file for the same
 			fileHandle.unassignHandle(); // Unassign the handle since a new handle will be assigned in the create call
@@ -466,7 +494,6 @@ int mgridfs::mgridfs_read(const char *file, char *data, size_t len, off_t offset
 		off_t startOffset = (offset < 0) ? offset + len : offset;
 		off_t endOffset = (offset < 0) ? 0 : offset;
 		*/
-
 		unsigned int activeChunkNum = offset / chunkSize;
 		size_t bytesRead = 0;
 		while (bytesRead < len && activeChunkNum < numChunks) {
@@ -639,7 +666,10 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
 		// the specified file name and make sure all the files are released / closed
 		LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
 		if (localGridFile) {
-			localGridFile->flush();
+			if (localGridFile->isDirty()) {
+				localGridFile->flush();
+			}
+
 			LocalGridFS::get().releaseFile(fileHandle.getFilename());
 		}
 
@@ -743,7 +773,7 @@ int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_
 			<< "}" << std::endl;
 		BSONElement fileObjId = fileObj.getField("_id");
 
-		dbc->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "directory"
+		dbc->update(globalFSOptions._filesNS, BSON("_id" << fileObjId.OID()), BSON("$set" << BSON("metadata.type" << "file"
 						<< "metadata.filename" << mgridfs::getPathBasename(file)
 						<< "metadata.directory" << mgridfs::getPathDirname(file)
 						<< "metadata.lastUpdated" << jsTime()
@@ -789,8 +819,12 @@ int mgridfs::mgridfs_create(const char *file, mode_t fileMode, struct fuse_file_
  */
 int mgridfs::mgridfs_ftruncate(const char *file, off_t offset, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_ftruncate{file: " << file << ", fh: " << ffinfo->fh << ", offset: " << offset << "}" << endl;
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
 
-	return -ENOTSUP;
+	return mgridfs_truncate(fileHandle.getFilename().c_str(), offset);
 }
 
 /**

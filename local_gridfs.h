@@ -13,10 +13,11 @@ class LocalGridFile;
 
 class LocalGridFS : protected boost::noncopyable {
 public:
+	typedef map<string, LocalGridFile*> LocalGridFileMap;
+
 	static LocalGridFS& get();
 
 	LocalGridFile* findByName(const string& filename);
-
 	LocalGridFile* createFile(const string& filename);
 	bool releaseFile(const string& filename);
 
@@ -26,7 +27,7 @@ private:
 	LocalGridFS();
 	~LocalGridFS();
 
-	static map<string, LocalGridFile*> _localGridFileMap;
+	static LocalGridFileMap _localGridFileMap;
 };
 
 }

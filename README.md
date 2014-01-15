@@ -31,7 +31,10 @@ TODO:
 ==============
 - fsck.mgridfs to fix hierarchy / permissions on the hierarchy. Data consistency checks cannot be done by this process and rather should be done someway in the MongoDB GridFS itself.
 
-Useful links for FUSE
-======================
+Useful links for FUSE / Mongo GridFS
+========================================
+- http://fuse.sourceforge.net/
 - https://www.kernel.org/doc/Documentation/filesystems/fuse.txt
 - http://www.cs.hmc.edu/~geoff/classes/hmc.cs135.201001/homework/fuse/fuse_doc.html
+- http://docs.mongodb.org/manual/core/gridfs/
+- http://docs.mongodb.org/ecosystem/drivers/cpp/

@@ -3,10 +3,16 @@
 
 #include <fuse.h>
 
+#include <vector>
 #include <string>
+#include <memory>
 #include <boost/utility.hpp>
 
 using namespace std;
+
+namespace mongo {
+	class GridFile;
+}
 
 namespace mgridfs {
 
@@ -16,24 +22,27 @@ public:
 	LocalGridFile(const string& filename);
 	virtual ~LocalGridFile();
 
-	virtual size_t getFileSize() const = 0;
-	virtual void setFileSize(size_t size) const = 0;
+	virtual inline size_t getCapacity() const { return _capacity; }
+	virtual inline size_t getSize() const { return _size; }
+	virtual inline bool isReadOnly() const { return _readOnly; }
+	virtual inline const string& getFilename() const { return _filename; }
 
-	virtual int openRemote() = 0;
+	virtual bool setCapacity(size_t size) = 0;
+	virtual bool setSize(size_t size) = 0;
+	virtual bool setReadOnly() = 0;
+	virtual bool setFilename(const string& filename) = 0;
+
+	virtual int openRemote(int fileFlags) = 0;
 	virtual int write(const char *data, size_t len, off_t offset) = 0;
 	virtual int read(char *data, size_t len, off_t offset) const = 0;
 	virtual int flush() = 0;
 
-	virtual inline bool isReadOnly() const { return _readOnly; }
-	virtual inline void setReadOnly() { _readOnly = true; }
-
 	virtual inline bool isDirty() const { return _dirty; }
-	virtual inline void setDirty() { _dirty = true; }
+	virtual inline void setDirty() { if (!_readOnly) { _dirty = true; } }
 
-	virtual inline string getFilename() const { return _filename; }
-	virtual inline void setFilename(const string& filename) { _filename = filename; }
-
-private:
+protected:
+	size_t _size;
+	size_t _capacity;
 	bool _readOnly;
 	bool _dirty;
 	string _filename;
@@ -44,13 +53,30 @@ private:
  * It may also contain special logic to move itself from being in-memory to
  * temporary disk based file
  */
-class LocalMemoryGridFile : protected LocalGridFile {
+class LocalMemoryGridFile : public LocalGridFile {
 public:
 	LocalMemoryGridFile();
 	LocalMemoryGridFile(const string& filename);
 	~LocalMemoryGridFile();
 
+	virtual bool setCapacity(size_t size);
+	virtual bool setSize(size_t size);
+	virtual bool setReadOnly();
+	virtual bool setFilename(const string& filename);
+
+
+	virtual int openRemote(int fileFlags);
+	virtual int write(const char *data, size_t len, off_t offset);
+	virtual int read(char *data, size_t len, off_t offset) const;
+	virtual int flush();
+
 private:
+	size_t _chunkSize;
+	vector<char*> _chunks;
+
+
+	auto_ptr<char> createFlushBuffer(size_t& bufferLen) const;
+	bool initLocalBuffers(mongo::GridFile& gridFile);
 };
 
 }
