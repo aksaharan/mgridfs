@@ -2,6 +2,7 @@
 
 #include <libgen.h>
 #include <string.h>
+#include <stdlib.h>
 
 using namespace mgridfs;
 
@@ -12,13 +13,20 @@ string mgridfs::getPathBasename(const string& path) {
 		baseName[0] = 0;
 	}
 
-	return string(baseName);
+	string baseNameStr(baseName);
+	free(pathTemp);
+
+	return baseNameStr;
 }
 
 string mgridfs::getPathDirname(const string& path) {
 	char* pathTemp = strdup(path.c_str());
 	char* dirName = dirname(pathTemp);
-	return string(dirName);
+
+	string dirNameStr(dirName);
+	free(pathTemp);
+
+	return dirNameStr;
 }
 
 char* mgridfs::toUpper(char* str) {

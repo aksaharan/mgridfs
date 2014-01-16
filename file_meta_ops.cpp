@@ -44,7 +44,6 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
 		}
 
 		BSONObj fileMeta = gridFile.getMetadata();
-		debug() << "File Meta " << fileMeta << "... and lastUpdated: " << fileMeta.getField("lastUpdated") << endl;
 
 		bzero(file_stat, sizeof(*file_stat));
 		file_stat->st_uid = fileMeta.hasField("uid") ? fileMeta.getIntField("uid") : 1;
@@ -673,10 +672,8 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
 			LocalGridFS::get().releaseFile(fileHandle.getFilename());
 		}
 
-		/*
 		// Release all handles associated with this filename
 		FileHandle::unassignAllHandles(fileHandle.getFilename());
-		*/
 	}
 
 	return 0;
@@ -986,5 +983,15 @@ int mgridfs::mgridfs_fallocate(const char *file, int mode, off_t offset, off_t l
 	trace() << "-> requested mgridfs_fallocate{file: " << file << ", fh: " << ffinfo->fh << ", mode: " << std::oct << mode 
 			<< ", offset: " << offset << ", len: " << len << "}" << endl;
 
-	return -ENOTSUP;
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+	if (!localGridFile) {
+		return -EBADF;
+	}
+
+	return localGridFile->setSize(len + offset);
 }

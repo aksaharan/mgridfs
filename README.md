@@ -19,17 +19,26 @@ Operations tested to be working
 
 Example mount
 ================
-Access for everyone - sudo ./mgridfs --host=localhost --port=27017 --db=rest --collprefix=ls --logfile=fs.log -o allow_other,default_permissions dummy
-Access only for mount user - ./mgridfs --host=localhost --port=27017 --db=rest --collprefix=ls --logfile=fs.log -dummy
+- Run in single-threaded mode for now until the system is made thread-safe
+Access for everyone - sudo ./mgridfs -s --host=localhost --port=27017 --db=rest --collprefix=ls --logfile=fs.log -o allow_other,default_permissions dummy
+Access only for mount user - ./mgridfs -s --host=localhost --port=27017 --db=rest --collprefix=ls --logfile=fs.log -dummy
+
+For specific options that you would like to use with mgridfs, check "mgridfs --help" option on the command
 
 Known issues
 ===============
 - All known issues with using mongodb in a distributed environment i.e. lack of ACIDity across multiple documents
 - Un-implemented features for file-system
+- Thread-safety for multi-threaded FUSE usage
 
 TODO:
 ==============
 - fsck.mgridfs to fix hierarchy / permissions on the hierarchy. Data consistency checks cannot be done by this process and rather should be done someway in the MongoDB GridFS itself.
+
+DEBUG
+========
+Using valgind, use something as follows (assuming mgridfs is in current directory and the mount point is dummy):
+valgrind --log-file=valgrind.log --tool=memcheck --leak-check=full --show-reachable=no --undef-value-errors=yes --track-origins=yes ./mgridfs -s --host=localhost --port=27017 --db=rest --collprefix=ls --loglevel=trace -o default_permissions -d dummy
 
 Useful links for FUSE / Mongo GridFS
 ========================================

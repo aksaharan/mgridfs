@@ -14,6 +14,7 @@ using namespace mgridfs;
 using namespace std;
 
 namespace {
+	//TODO: Make these configurable parameter for command-line
 	const size_t DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE = 128 * 1024;
 	const size_t MAX_MEMORY_FILE_CAPACITY = 64 * 1024 * 1024;
 }
@@ -57,6 +58,12 @@ LocalMemoryGridFile::~LocalMemoryGridFile() {
 	}
 }
 
+void LocalMemoryGridFile::setDirty(bool flag) {
+	if (!_readOnly) {
+		_dirty = flag;
+	}
+}
+
 bool LocalMemoryGridFile::setCapacity(size_t capacity) {
 	trace() << " -> LocalMemoryGridFile::setCapacity {file: " << _filename << ", capacity: {old: " << _capacity
 		<< ", new: " << capacity << "} }" << endl;
@@ -82,6 +89,7 @@ bool LocalMemoryGridFile::setSize(size_t size) {
 		// to do
 		_size = size;
 		_dirty = true;
+		return true;
 	}
 
 	// Capacity will need to grow beyond current capacity
@@ -92,10 +100,10 @@ bool LocalMemoryGridFile::setSize(size_t size) {
 		return false;
 	}
 
-	size_t currentChunks = (_capacity + 1) / _chunkSize;
-	size_t newChunks = (size + 1) / _chunkSize;
+	size_t currentChunks = (_capacity + _chunkSize - 1) / _chunkSize;
+	size_t newChunks = (size + _chunkSize - 1) / _chunkSize;
 	if (currentChunks > newChunks) {
-		fatal() << "Something is wrong with capapcity / chunk calculations {filename: " << _filename 
+		error() << "Something is wrong with capapcity / chunk calculations {filename: " << _filename 
 			<< ", capacity: " << _capacity << ", size: {old: " << _size << ", old: " << size 
 			<< "}, chunks: {old: " << currentChunks << ", new: " << newChunks << "}, chunkSize: " 
 			<< _chunkSize << "}, will not increase capacity." << endl;
@@ -106,7 +114,7 @@ bool LocalMemoryGridFile::setSize(size_t size) {
 	for (size_t i = 0; i < diffChunks; ++i) {
 		char* tempData = new (nothrow) char[_chunkSize];
 		if (!tempData) {
-			fatal() << "Failed to allocate memory {filename: " << _filename << ", chunkSize: " << _chunkSize
+			error() << "Failed to allocate memory {filename: " << _filename << ", chunkSize: " << _chunkSize
 				<< ", diffChunks: " << diffChunks << ", AllocatedChunks: " << i 
 				<< "}, will not continue further." << endl;
 			return false;
@@ -116,6 +124,8 @@ bool LocalMemoryGridFile::setSize(size_t size) {
 		_capacity += _chunkSize;
 		_size = (_capacity < size) ? _capacity : size;
 		_dirty = true;
+		trace() << "Added chunk {total: " << _chunks.size() << ", capacity: " << _capacity
+			<< ", size: " << _size << ", requested-size: " << size << "}" << endl;
 	}
 	
 	return true;
@@ -193,7 +203,44 @@ int LocalMemoryGridFile::write(const char *data, size_t len, off_t offset) {
 		return -EROFS;
 	}
 
-	// TODO: Complete implementation
+	if (len == 0) {
+		return 0;
+	}
+
+	size_t updatedSize = (offset + len);
+	if (_capacity > updatedSize) {
+		_size = updatedSize;
+	} else if (!setSize(updatedSize)) {
+			return -ENOMEM;
+	}
+
+	return _write(data, len, offset);
+}
+
+int LocalMemoryGridFile::_write(const char *data, size_t len, off_t offset) {
+	// Assumes the appropriate space is available and theh chunks have been allocated
+	// appropriately
+	size_t whichChunk = (offset + 1) / _chunkSize;
+	size_t offsetInChunk = offset % _chunkSize;
+	size_t bytesWritten = 0;
+	char* dest = NULL;
+	while (bytesWritten < len) {
+		// TODO: Check for the data / size of the file / offset consistency / chunk tracking etc.
+		size_t bytesPending = len - bytesWritten;
+		size_t n = ((bytesPending > (_chunkSize - offsetInChunk)) ? (_chunkSize - offsetInChunk) : bytesPending);
+
+		trace() << "Writing to chunk {chunk: " << whichChunk << ", input-offset: " << bytesWritten 
+			<< ", chunk-offset: " << offsetInChunk
+			<< ", n: " << n << ", bytesPending: " << bytesPending << "}" << endl;
+
+		dest = _chunks[whichChunk];
+		memcpy(dest + offsetInChunk, (data + bytesWritten), n);
+
+		bytesWritten += n;
+		offsetInChunk = 0;
+		++whichChunk;
+	}
+
 	_dirty = true;
 	return len;
 }
@@ -216,6 +263,7 @@ int LocalMemoryGridFile::read(char *data, size_t len, off_t offset) const {
 	size_t bytesRead = 0;
 	while (bytesRead < len && activeChunkNum < numChunks) {
 		int bytesToRead = 0;
+
 		//TODO: Change the chunkLen to be correct length in case of last chunk
 		int chunkLen = _chunkSize;
 		const char* chunkData = _chunks[activeChunkNum];
@@ -247,12 +295,12 @@ int LocalMemoryGridFile::flush() {
 	trace() << " -> LocalMemoryGridFile::flush {file: " << _filename << "}" << endl;
 	if (!_dirty) {
 		// Since, there are no dirty chunks, this does not need a flush
-		debug() << "buffers are not dirty.. need not flush {filename: " << _filename << "}" << endl;
+		info() << "buffers are not dirty.. need not flush {filename: " << _filename << "}" << endl;
 		return 0;
 	}
 
 	size_t bufferLen = 0;
-	auto_ptr<char> buffer = createFlushBuffer(bufferLen);
+	boost::shared_array<char> buffer = createFlushBuffer(bufferLen);
 	if (!buffer.get() && bufferLen > 0) {
 		// Failed to create flush buffer
 		return -ENOMEM;
@@ -267,7 +315,7 @@ int LocalMemoryGridFile::flush() {
 
 		if (!origGridFile.exists()) {
 			dbc.done();
-			debug() << "Requested file not found for flushing back data {file: " << _filename << "}" << endl;
+			warn() << "Requested file not found for flushing back data {file: " << _filename << "}" << endl;
 			return -EBADF;
 		}
 
@@ -328,16 +376,16 @@ int LocalMemoryGridFile::flush() {
 	return 0;
 }
 
-auto_ptr<char> LocalMemoryGridFile::createFlushBuffer(size_t& bufferLen) const {
+boost::shared_array<char> LocalMemoryGridFile::createFlushBuffer(size_t& bufferLen) const {
 	bufferLen = _size;
-	auto_ptr<char> tempBuffer(NULL);
+	boost::shared_array<char> tempBuffer;
 	if (!bufferLen) {
 		// If the buffer is 0 length, then return NULL with bufferLen = 0
 		return tempBuffer;
 	}
 
 	tempBuffer.reset(new (nothrow) char[bufferLen]);
-	if (tempBuffer.get()) {
+	if (!tempBuffer.get()) {
 		// Failed to allocate memory, return 
 		error() << "Failed to allocate temp buffer for full file {filename: " << _filename
 			<< ", size: " << _size << "}, will return empty buffer without data." 
@@ -360,6 +408,28 @@ auto_ptr<char> LocalMemoryGridFile::createFlushBuffer(size_t& bufferLen) const {
 }
 
 bool LocalMemoryGridFile::initLocalBuffers(GridFile& gridFile) {
-	//TODO: initialize local buffers
+	if (!setSize(gridFile.getContentLength())) {
+		return false;
+	}
+
+	//TODO: Check for size compared to the content length that was specified for consistency
+
+	off_t offset = 0;
+	int chunkCount = gridFile.getNumChunks();
+	for (int i = 0; i < chunkCount; ++i) {
+		//TODO: Error checking or getChunk and related handling
+		GridFSChunk chunk = gridFile.getChunk(i);
+		int chunkLen = 0;
+		const char* data = chunk.data(chunkLen);
+		if (!data) {
+			error() << "Failed to get data from expected chunk {file: " << _filename
+				<< ", chunkOffset: " << i << ", totalChunks: " << chunkCount
+				<< "}, will stop in-between and return error." << endl;
+			return false;
+		}
+		_write(data, chunkLen, offset);
+		offset += chunkLen;
+	}
+
 	return true;
 }
