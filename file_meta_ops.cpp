@@ -226,14 +226,36 @@ int mgridfs::mgridfs_symlink(const char *srcfile, const char *destfile) {
 /** Rename a file */
 int mgridfs::mgridfs_rename(const char *srcfile, const char *destfile) {
 	trace() << "-> requested mgridfs_rename{srcfie: " << srcfile << ", destfile: " << destfile << "}" << endl;
+	// TODO: Look for work conditions for sharded gridfs and what should be done in that case
+	// TODO: Move out for handling recursive directory structure
+	try {
+		ScopedDbConnection dbc(globalFSOptions._connectString);
+		dbc->update(globalFSOptions._filesNS, BSON("filename" << srcfile), 
+			BSON("$set" << BSON("filename" << destfile
+							<< "metadata.filename" << mgridfs::getPathBasename(destfile)
+							)
+					)
+			);
+		BSONObj errorDetail = dbc->getLastErrorDetailed();
+		dbc.done();
 
-	return -ENOTSUP;
+		int n = errorDetail.getIntField("n");
+		if (n <= 0) {
+			debug() << "Failed to rename requested file {srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
+			return -ENOENT;
+		}
+	} catch (DBException& e) {
+		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
+			<< ", exception: " << e.toString() << "}" << endl;
+		return -EIO;
+	}
+
+	return 0;
 }
 
 /** Create a hard link to a file */
 int mgridfs::mgridfs_link(const char *srcfile, const char *destfile) {
 	trace() << "-> requested mgridfs_link{srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
-
 	info() << "hard-links are not supported {srcfile: " << srcfile << ", destfile: " << destfile << "}" << endl;
 	return -ENOTSUP;
 }
