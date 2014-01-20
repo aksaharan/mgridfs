@@ -695,7 +695,8 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
 		}
 
 		// Release all handles associated with this filename
-		FileHandle::unassignAllHandles(fileHandle.getFilename());
+		//FileHandle::unassignAllHandles(fileHandle.getFilename());
+		fileHandle.unassignHandle();
 	}
 
 	return 0;
