@@ -712,7 +712,22 @@ int mgridfs::mgridfs_release(const char *file, struct fuse_file_info *ffinfo) {
 int mgridfs::mgridfs_fsync(const char *file, int param, struct fuse_file_info *ffinfo) {
 	trace() << "-> requested mgridfs_fsync{file: " << file << ", fh: " << ffinfo->fh << ", param: " << param << "}" << endl;
 
-	return -ENOTSUP;
+	FileHandle fileHandle(file, ffinfo->fh);
+	if (!fileHandle.isValid()) {
+		return -EBADF;
+	}
+
+	// If read-only mode file, this does not need to be flushed to the database and can be ignored safely
+	if ((ffinfo->flags & O_ACCMODE) == O_RDONLY) {
+		return 0;
+	}
+
+	LocalGridFile* localGridFile = LocalGridFS::get().findByName(fileHandle.getFilename());
+	if (!localGridFile) {
+		return -EBADF;
+	}
+
+	return localGridFile->flush();
 }
 
 /** Set extended attributes */
