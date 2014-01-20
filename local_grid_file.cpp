@@ -13,12 +13,6 @@ using namespace mongo;
 using namespace mgridfs;
 using namespace std;
 
-namespace {
-	//TODO: Make these configurable parameter for command-line
-	const size_t DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE = 128 * 1024;
-	const size_t MAX_MEMORY_FILE_CAPACITY = 64 * 1024 * 1024;
-}
-
 LocalGridFile::LocalGridFile()
 	: _size(0), _capacity(0), _readOnly(false), _dirty(false), _filename("") {
 }
@@ -31,11 +25,11 @@ LocalGridFile::~LocalGridFile() {
 }
 
 LocalMemoryGridFile::LocalMemoryGridFile()
-	: _chunkSize(DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE) {
+	: _chunkSize(globalFSOptions._memChunkSize) {
 }
 
 LocalMemoryGridFile::LocalMemoryGridFile(const string& filename)
-	: LocalGridFile(filename), _chunkSize(DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE) {
+	: LocalGridFile(filename), _chunkSize(globalFSOptions._memChunkSize) {
 }
 
 LocalMemoryGridFile::~LocalMemoryGridFile() {
@@ -93,7 +87,7 @@ bool LocalMemoryGridFile::setSize(size_t size) {
 	}
 
 	// Capacity will need to grow beyond current capacity
-	if (size >= MAX_MEMORY_FILE_CAPACITY) {
+	if (size >= globalFSOptions._maxMemFileSize) {
 		error() << "Memory size requested is beyond max capacity for in-memory files {filename: "
 			<< _filename << ", size: " << _size << ", requested-size: " << size 
 			<< "}, will not increase the capacity." << endl;
@@ -170,11 +164,11 @@ int LocalMemoryGridFile::openRemote(int fileFlags) {
 			return -EBADF;
 		}
 
-		if (origGridFile.getContentLength() > MAX_MEMORY_FILE_CAPACITY) {
+		if (origGridFile.getContentLength() > globalFSOptions._maxMemFileSize) {
 			// Don't support opening files of size > MAX_MEMORY_FILE_CAPACITY in R/W mode
 			error() << "Requested file length is beyond supported length for in-memory files {file: " 
 				<< _filename << ", length: {requested: " << origGridFile.getContentLength()
-				<< ", max-supported: " << MAX_MEMORY_FILE_CAPACITY << "} }" << endl;
+				<< ", max-supported: " << globalFSOptions._maxMemFileSize << "} }" << endl;
 			return -EROFS;
 		}
 
