@@ -63,7 +63,13 @@ int mgridfs::mgridfs_getattr(const char* file, struct stat* file_stat) {
 			file_stat->st_size = fileMeta.objsize();
 			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
 		} else if (S_ISREG(file_stat->st_mode)) {
-			file_stat->st_size = gridFile.getContentLength();
+			LocalGridFile* localGridFile = LocalGridFS::get().findByName(file);
+			if (localGridFile) {
+				// Get local-file size in case the file has been opened and resides in-memory
+				file_stat->st_size = localGridFile->getSize();
+			} else {
+				file_stat->st_size = gridFile.getContentLength();
+			}
 			file_stat->st_blocks = get512BlockCount(file_stat->st_size);
 		} else if (S_ISLNK(file_stat->st_mode)) {
 			const char* targetLink = fileMeta.getStringField("target");

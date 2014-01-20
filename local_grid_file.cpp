@@ -203,9 +203,11 @@ int LocalMemoryGridFile::write(const char *data, size_t len, off_t offset) {
 
 	size_t updatedSize = (offset + len);
 	if (_capacity > updatedSize) {
-		_size = updatedSize;
+		// Nothing to be done, the size remains as it was before this 
+		// Change size only if it is expanding
+		_size = (updatedSize > _size) ? updatedSize : _size;
 	} else if (!setSize(updatedSize)) {
-			return -ENOMEM;
+		return -ENOMEM;
 	}
 
 	return _write(data, len, offset);
