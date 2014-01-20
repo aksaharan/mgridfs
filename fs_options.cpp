@@ -10,6 +10,9 @@ using namespace mgridfs;
 
 namespace { // Anonymous namespace
 
+const size_t DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE = 128;
+const size_t DEFAULT_MAX_MEMORY_FILE_CHUNKS = 64 * 1024 / 128;
+
 /*
  * Temporary storage for parsing the arguments using fuse api
  */
@@ -18,6 +21,10 @@ struct _ParsedFuseOptions {
 	const char* _db;
 	const char* _collPrefix;
 	unsigned int _port;
+
+	/* Specific for Local Memory Grid File */
+	unsigned int _memChunkSize;
+	unsigned int _maxMemFileChunks;
 
 	char* _logFile;
 	char* _logLevel;
@@ -29,6 +36,7 @@ static struct _ParsedFuseOptions _parsedFuseOptions;
 
 enum MGRIDFS_KEYS {
 	KEY_NONE,
+	KEY_ENABLE_DYN_MEM_CHUNK,
 	KEY_HELP,
 	KEY_VERSION,
 };
@@ -40,6 +48,11 @@ struct fuse_opt mgridfsOptions[] = {
 	MGRIDFS_OPT_KEY("--collprefix=%s", _collPrefix, 0),
 	MGRIDFS_OPT_KEY("--logfile=%s", _logFile, 0),
 	MGRIDFS_OPT_KEY("--loglevel=%s", _logLevel, 0),
+
+	MGRIDFS_OPT_KEY("--memChunkSize=%d", _memChunkSize, 0),
+	MGRIDFS_OPT_KEY("--maxMemFileChunks=%d", _maxMemFileChunks, 0),
+	FUSE_OPT_KEY("--enableDynMemChunk", KEY_ENABLE_DYN_MEM_CHUNK),
+
 	FUSE_OPT_KEY("--help", KEY_HELP),
 	FUSE_OPT_KEY("--version", KEY_VERSION),
 	{NULL}
@@ -51,20 +64,30 @@ void printHelp(int exitCode) {
 			<< endl
 			<< "mgridfs-options" << endl
 			<< "----------------" << endl
-			<< " --host=<host>           mongodb hostname (defaults to localhost)" << endl
-			<< " --port=<port>           mongodb port number (defaults to 27017)" << endl
-			<< " --db=<db>               mongo GridFS db name" << endl
-			<< " --collprefix=<host>     mongo GridFS collection name prefix (defaults to fs)" << endl
-			<< " --logfile=<file>        logfile for persistent logging from daemon" << endl
-			<< " --loglevel=<level>      logging level for logs" << endl
-			<< " --help                  diplay help for command options" << endl
-			<< " --version               display mgridfs version information" << endl
+			<< " --host=<host>              mongodb hostname (defaults to localhost)" << endl
+			<< " --port=<port>              mongodb port number (defaults to 27017)" << endl
+			<< " --db=<db>                  mongo GridFS db name" << endl
+			<< " --collprefix=<host>        mongo GridFS collection name prefix (defaults to fs)" << endl
+			<< " --logfile=<file>           logfile for persistent logging from daemon" << endl
+			<< " --loglevel=<level>         logging level for logs" << endl
+			<< " --memChunkSize=<num>       Chunk size for in-memory local grid file (applicable for RW/W modes)." << endl
+			<< "                            Specified in KB, defaults to " << DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE << endl
+			<< " --maxMemFileChunks=<num>   Max size for in-memory local grid file in terms of # of memory chunks " << endl
+			<< "                            specified by --memChunkSize, defaults to " << DEFAULT_MAX_MEMORY_FILE_CHUNKS << endl
+			<< " --enableDynMemChunk        Enable chunk size to be variable across files for it to be " << endl
+			<< "                            modified to be in-line with GridFile chunk size when opening " << endl
+			<< "                            file in R/W mode." << endl
+			<< " --help                     diplay help for command options" << endl
+			<< " --version                  display mgridfs version information" << endl
 			<< endl 
 			<< "fuse-options (\"man mount.fuse\" for detailed options)" << endl
+			<< " -d                         mount fuse in debug mode. This also imples to run with -f." << endl
+			<< " -f                         mount in foreground mode." << endl
+			<< " -s                         mount in single-threaded mode. By default mounts in multi-threaded mode." << endl
+			<< " -o <fuse options>          specify fuse specific mount options." << endl
 			<< "-------------------------------------------------------" << endl
 		;
 		
-	//TODO: Print correct help document
 	::exit(exitCode);
 }
 
@@ -81,6 +104,11 @@ int fuseOptionCallback(void* data, const char* arg, int key, struct fuse_args* o
 				<< endl
 			;
 		::exit(0);
+	}
+
+	if (key == KEY_ENABLE_DYN_MEM_CHUNK) {
+		globalFSOptions._enableDynMemChunk = true;
+		return -1;
 	}
 
 	return 1;
@@ -101,17 +129,21 @@ const unsigned int mgridfs::MGRIDFS_PATCH_VERSION = 0;
 
 
 bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
+	bzero(&_parsedFuseOptions, sizeof(_parsedFuseOptions));
 	if (fuse_opt_parse(&fuseArgs, &_parsedFuseOptions, mgridfsOptions, fuseOptionCallback) == -1) {
 		return false;
 	}
 
-	info() << "Filesystem invocation requested for following parameters" << endl
-			<< "  Host: " << _parsedFuseOptions._host << endl
-			<< "  Port: " << _parsedFuseOptions._port << endl
-			<< "  DB: " << _parsedFuseOptions._db << endl
-			<< "  Collection Prefix: " << _parsedFuseOptions._collPrefix << endl
-			<< "  LogFile: " << _parsedFuseOptions._logFile << endl
-			<< "  LogLevel: " << _parsedFuseOptions._logLevel << endl
+	info() << "Filesystem invocation requested for following parameters {" << endl
+			<< " server: {host: " << (_parsedFuseOptions._host ? _parsedFuseOptions._host : "") 
+			<< ", port: " << _parsedFuseOptions._port << "}, " << endl
+			<< " ns: {db: " << (_parsedFuseOptions._db ? _parsedFuseOptions._db : "") 
+			<< ", coll_prefix: " << (_parsedFuseOptions._collPrefix ? _parsedFuseOptions._collPrefix : "") << "}, " << endl
+			<< " logging: {file: " << (_parsedFuseOptions._logFile ? _parsedFuseOptions._logFile : "") 
+			<< ", level: " << (_parsedFuseOptions._logLevel ? _parsedFuseOptions._logLevel : "") << "}, " << endl
+			<< " memfile: {chunkSize: " << _parsedFuseOptions._memChunkSize << ", maxChunks: " << _parsedFuseOptions._maxMemFileChunks
+				<< ", dynChunkSize: " << globalFSOptions._enableDynMemChunk << "}" << endl
+			<< "}" << endl
 		;
 
 	if (!_parsedFuseOptions._host) {
@@ -137,6 +169,16 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 		info() << "Setting mongodb collprefix -> " << _parsedFuseOptions._collPrefix << endl;
 	}
 
+	if (!_parsedFuseOptions._memChunkSize) {
+		_parsedFuseOptions._memChunkSize = DEFAULT_MEMORY_GRID_FILE_CHUNK_SIZE;
+		info() << "Setting memfile chunk size -> " << _parsedFuseOptions._memChunkSize << endl;
+	}
+
+	if (!_parsedFuseOptions._maxMemFileChunks) {
+		_parsedFuseOptions._maxMemFileChunks = DEFAULT_MAX_MEMORY_FILE_CHUNKS;
+		info() << "Setting memfile chunks / file -> " << _parsedFuseOptions._maxMemFileChunks << endl;
+	}
+
 	stringstream ss;
 	ss << _parsedFuseOptions._host << ":" << _parsedFuseOptions._port;
 
@@ -145,7 +187,11 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 	globalFSOptions._collPrefix = _parsedFuseOptions._collPrefix;
 	globalFSOptions._host = _parsedFuseOptions._host;
 	globalFSOptions._port = _parsedFuseOptions._port;
-	globalFSOptions._logFile = _parsedFuseOptions._logFile;
+	globalFSOptions._memChunkSize = _parsedFuseOptions._memChunkSize * 1024; // Chunk size is in KB on the command-line
+	globalFSOptions._maxMemFileChunks = _parsedFuseOptions._maxMemFileChunks;
+	globalFSOptions._maxMemFileSize = globalFSOptions._memChunkSize * globalFSOptions._maxMemFileChunks;
+	info() << "Max memory file size {size: " << globalFSOptions._maxMemFileSize << "}" << endl;
+
 	if (_parsedFuseOptions._logLevel) {
 		globalFSOptions._logLevel = FSLogManager::get().stringToLogLevel(toUpper(_parsedFuseOptions._logLevel));
 		if (globalFSOptions._logLevel == LL_INVALID) {
@@ -170,6 +216,7 @@ bool mgridfs::FSOptions::fromCommandLine(struct fuse_args& fuseArgs) {
 	}
 
 	if (_parsedFuseOptions._logFile) {
+		globalFSOptions._logFile = _parsedFuseOptions._logFile;
 		FSLogFile* fsLogFile = new FSLogFile(_parsedFuseOptions._logFile);
 		if (fsLogFile) {
 			info() << "Initializing file logger {file: " << _parsedFuseOptions._logFile << "}" << endl;

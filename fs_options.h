@@ -39,8 +39,9 @@ struct FSOptions {
 	std::string _filesNS;
 	std::string _chunksNS;
 
-	unsigned long _memChunkSize;
-	unsigned long _maxMemFileChunks;
+	size_t _memChunkSize;
+	size_t _maxMemFileChunks;
+	size_t _maxMemFileSize;
 	bool _enableDynMemChunk;
 
 	boost::bimap<string, string> _metadataKeyMap;
