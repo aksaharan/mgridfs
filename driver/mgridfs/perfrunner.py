@@ -1,66 +1,269 @@
+import sys
+import os
+import stat
+import time
+import io
+
+import datetime
+from datetime import datetime
+from datetime import timedelta
+
+import traceback
 import argparse
 
-def get_parsed_args():
+"""
+#!/usr/bin/env python
+
+import pymongo
+import gridfs
+
+db = pymongo.MongoClient("localhost", 27017).test
+fs = gridfs.GridFS(db)
+
+fs.put("Hello World")
+fs.put("Hello World", filename="hello-ji-file.txt", otherprop="ThisisOtherProp", metadata={})
+fs.put("Hello World", filename="hello-ji-file-metadata.txt", otherprop="ThisisPropMeta", 
+		metadata={"directory": "/sample/directory/final", "owner": 123, "group": 564, "permission": 0644})
+"""
+
+#mgridfs -s --host=localhost --port=27017 --db=rest --collprefix=ls --logfile=fs.log --loglevel=trace --memChunkSize=1024 --maxMemFileChunks=100 dummy
+
+def getArgumentParser():
 	p = argparse.ArgumentParser()
-	Runner.build_arg_parser(p)
-	GridFSPerfRunner.build_arg_parser(p)
-	FSOverGridFSPerfRunner.build_arg_parser(p)
-	return p.parse_args()
+
+	Runner.buildArgParser(p)
+#	GridFSPerfRunner.buildArgParser(p)
+	FSOverGridFSPerfRunner.buildArgParser(p)
+	return p
 	
-def run():
-	parser = argparse.ArgumentParser
+def run(p):
+	runners = [];
+	# Add MGridFS runner for read/write via mgridfs mounted file system
+	if (p.run == "mgridfs" or p.run == "both"):
+		runner = FSOverGridFSPerfRunner(p)
+		if (not runner.isRunnable()):
+			print >> sys.stderr, "ERROR: Instance mgridfs is not runnable..."
+			return -1
+
+		runners.append(runner)
+
+	# Add GridFS runner for read/write directly to GridFS
+	if (p.run == "gridfs" or p.run == "both"):
+		runner = GridFSPerfRunner(p)
+		if (not runner.isRunnable()):
+			print >> sys.stderr, "ERROR: Instance gridfs is not runnable..."
+			return -1
+
+		runners.append(runner)
+	
+	if (len(runners) == 0):
+		#TODO: use standard logging library
+		print >> sys.stderr, "ERROR: no runners configured, will abort."
+		return -1
+
+	completed = 0
+	print "INFO: Runners configured for execution: ", len(runners)
+	for runner in runners:
+		print "Running runner: ", runner
+		try:
+			if (runner.run()):
+				++completed;
+		except Exception, e:
+			print "ERROR: " + str(e)
+			traceback.print_exc()
+	
+	return (len(runners) - completed)
 
 
 class Runner(object):
 	"""Perf runner base class that defines common behaviour amont the classes
 	"""
-
-	def __init__(self):
-		print "Called for ", __file__, "::__init__"
-	
-	def run(self):
-		print "This is in " + __file__ + "::run"
-		return False
+	_files = []
+	_outFile = None
+	_outFilename = ""
+	_srcdir = ""
+	_loopCount = None
 
 	@classmethod
-	def build_arg_parser(self, p):
-		p.add_argument("-v", "--verbose", help="run in verbose mode")
-		p.add_argument("--run", help="type of perf run i.e. [ mgridfs | gridfs ].", choices=["mgridfs", "gridfs"])
+	def buildArgParser(self, p):
+		p.add_argument("-v", "--verbose", help="run in verbose mode", default = True)
+		p.add_argument("--run", help="type of perf run i.e. [ mgridfs | gridfs ].", choices=["mgridfs", "gridfs", "both"])
 
-		p.add_argument("--src", help="source file directory from where to pick test files. Ideally this would be local file (not the mgridfs mounted one).")
+		p.add_argument("--srcdir", help="source file directory from where to pick test files. Ideally this would be local file (not the mgridfs mounted one).",
+			default = ".")
 		p.add_argument("--files", help="comma separated list of files to be used for both reading and writing.")
+		p.add_argument("--outfile", help="dump statistics to the specified out file. By default prints to the standard out.");
+		p.add_argument("--loopcnt", help="loop count for each file run. By default set to 100.", type = int, default = 100);
 		pass
+
+
+	def __init__(self, p):
+		print "Called for ", __name__, ".Runner.__init__ -> ", p
+		if (p.files != None):
+			self._files = p.files.split(",")
+
+		self._srcdir = p.srcdir
+		self._outFilename = p.outfile
+		if (self._outFilename == None):
+			self._outFile = sys.stdout
+		else:
+			self._outFile = open(self._outFilename, "w")
+
+		self._loopCount = p.loopcnt
+
+
+	def __str__(self):
+		return __name__ + ".Runner"
+
+
+	def isRunnable(self):
+		if (len(self._files) <= 0):
+			print >> sys.stderr, "No files specified for the run."
+			return False
+
+		if (self._outFile == None):
+			return False
+
+		if (self._srcdir == None):
+			return False
+
+		if (not os.path.isdir(self._srcdir)):
+			return False
+
+		return True
+
+
+	def run(self):
+		if (not self.isRunnable()):
+			return False
+
+		self.printStatHeader(["file", "size", "repeat_count", "time (millisecs)"])
+
+		for filename in self._files:
+			if (self.runFile(filename) == None):
+				print "ERROR: Failed to run for file: ", filename
+				continue
+
+		self.printStatFooter([])
+
+
+	def runFile(self):
+		raise NotImplementedError(__name__ + ".runFile not implemented")
+
+
+	def printStatHeader(self, headers):
+		print >> self._outFile, "\t".join(map(str, headers))
+
+
+	def printStatFooter(self, footers):
+		print >> self._outFile, "\t".join(map(str, footers))
+
+
+	def printStatsRecord(self, stats):
+		print >> self._outFile, "\t".join(map(str, stats))
+
 		
 
 class FSOverGridFSPerfRunner(Runner):
 	"""Class to run performance tests for MGridFS exported FS
 	"""
 
-	def __init__(self):
-		print "Called for ", __file__, "::__init__"
-	
-	def run(self):
-		print "This is in " + __file__ + "::run"
-		return True
-
 	@classmethod
-	def build_arg_parser(self, p):
-		p.add_argument("--dest", help="destination file directory to copy the files to. This should be mgridfs mounted path.")
+	def buildArgParser(self, p):
+		p.add_argument("--destdir", help="destination file directory to copy the files to. This should be mgridfs mounted path.")
+
+
+	def __init__(self, p):
+		print "Called for ", __name__, ".FSOverGridFSPerfRunner.__init__"
+		super(FSOverGridFSPerfRunner, self).__init__(p)
+
+		self._destdir = p.destdir
+
+	
+	def __str__(self):
+		return __name__ + ".FSOverGridFSPerfRunner"
+
+
+	def isRunnable(self):
+		if (not super(FSOverGridFSPerfRunner, self).isRunnable()):
+			return False
+
+		if (self._destdir == None):
+			return False
+
+		if (not os.path.isdir(self._destdir)):
+			return False
+
+		return True;
+
+
+	def runFile(self, filename):
+		fullDestFilename = os.path.join(self._destdir, filename)
+		if (not os.path.isfile(fullDestFilename)):
+			return None
+
+	#	if (not runFileWrite(filename)):
+	#		return None
+
+		if (not self.runFileRead(filename)):
+			return None
+
+
+	def runFileRead(self, filename):
+		fullFilename = os.path.join(self._destdir, filename)
+
+		try:
+			fileStat = os.stat(fullFilename)
+		except:
+			print "ERROR: File is not accessible [", filename, "]"
+			return None
+
+		fileSize = fileStat[stat.ST_SIZE]
+		for i in range(self._loopCount):
+			start = time.time()
+
+			f = io.open(fullFilename, "r")
+			readBytes = f.read(4096 * 1024)
+			while (len(readBytes) > 0):
+				readBytes = f.read(4096 * 1024)
+
+			f.close()
+
+			diffTime = (time.time() - start) * 1000
+			self.printStatHeader([filename, fileSize, 1, diffTime])
+
+		return True
 
 
 
 #########################################################
+'''
 class GridFSPerfRunner(Runner):
 	"""Class to run performance tests for file operations directly on MongoDB-GridFS
 	"""
 
-	def __init__(self):
-		print "Called for ", __file__, "::__init__"
-
 	@classmethod
-	def build_arg_parser(self, p):
-		p.add_argument("--server", help="mongodb server.")
-		p.add_argument("--port", type=int, help="mongodb port.")
-		p.add_argument("--db", help="mongodb database name.")
-		p.add_argument("--collprefix", help="mongodb collection prefix to be used for files and chunks collections.")
+	def buildArgParser(self, p):
+		p.add_argument("--server", help="mongodb server.", default = "localhost")
+		p.add_argument("--port", help="mongodb port.", type = int,  default = 27017)
+		p.add_argument("--db", help="mongodb database name.", default = "test")
+		p.add_argument("--collprefix", help="mongodb collection prefix to be used for files and chunks collections.", default = "fs")
 
+
+	def __init__(self, p):
+		print "Called for ", __name__, ".GridFSPerfRunner.__init__"
+		super(GridFSPerfRunner, self).__init__(p)
+
+	def __str__(self):
+		return __name__ + ".GridFSPerfRunner"
+
+	def isRunnable(self):
+		if (not super(GridFSPerfRunner, self).isRunnable()):
+			return False
+
+		return True;
+
+	def runFile(self, filename):
+		print "This is in " + __name__ + ".runFile"
+		return True
+'''
