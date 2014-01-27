@@ -20,9 +20,9 @@ from mgridfs import *
 
 def main():
 	print "This is test print from the main.....\n"
-	runner = perfrunner.run()
-	args = perfrunner.get_parsed_args()
-	print args
+	argParser = perfrunner.getArgumentParser()
+	args = argParser.parse_args()
+	runner = perfrunner.run(args)
 
 if __name__ == "__main__":
 	main()
