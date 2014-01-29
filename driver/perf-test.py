@@ -1,13 +1,7 @@
 #!/usr/bin/env python
 
-import bson
-import optparse
-import os
-import re
-import shutil
-import socket
 import sys
-import time
+import os
 import traceback
 import argparse
 
