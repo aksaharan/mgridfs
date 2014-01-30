@@ -83,6 +83,7 @@ class Runner(object):
 	_outFilename = ""
 	_srcdir = ""
 	_loopCount = None
+	_filesAvailableForRead = []
 
 	@classmethod
 	def buildArgParser(self, p):
@@ -137,7 +138,7 @@ class Runner(object):
 		if (not self.isRunnable()):
 			return False
 
-		self.printStatHeader(["file", "size", "repeat_count", "time (millisecs)"])
+		self.printStatHeader(["file", "op", "size", "repeat_count", "time (millisecs)"])
 
 		for filename in self._files:
 			if (self.runFile(filename) == None):
@@ -159,7 +160,7 @@ class Runner(object):
 		print >> self._outFile, "\t".join(map(str, footers))
 
 
-	def printStatsRecord(self, stats):
+	def printStatRecord(self, stats):
 		print >> self._outFile, "\t".join(map(str, stats))
 
 		
@@ -198,12 +199,8 @@ class FSOverGridFSPerfRunner(Runner):
 
 
 	def runFile(self, filename):
-		fullDestFilename = os.path.join(self._destdir, filename)
-		if (not os.path.isfile(fullDestFilename)):
+		if (not self.runFileWrite(filename)):
 			return None
-
-	#	if (not runFileWrite(filename)):
-	#		return None
 
 		if (not self.runFileRead(filename)):
 			return None
@@ -216,24 +213,69 @@ class FSOverGridFSPerfRunner(Runner):
 			fileStat = os.stat(fullFilename)
 		except:
 			print "ERROR: File is not accessible [", filename, "]"
-			return None
+			return False
 
 		fileSize = fileStat[stat.ST_SIZE]
 		for i in range(self._loopCount):
 			start = time.time()
 
-			f = io.open(fullFilename, "r")
-			readBytes = f.read(4096 * 1024)
-			while (len(readBytes) > 0):
-				readBytes = f.read(4096 * 1024)
-
-			f.close()
-
-			diffTime = (time.time() - start) * 1000
-			self.printStatHeader([filename, fileSize, 1, diffTime])
+			try:
+				with open(fullFilename, "r") as f:
+					readBytes = f.read(4096 * 1024)
+					while (len(readBytes) > 0):
+						readBytes = f.read(4096 * 1024)
+			except Exception, e:
+				traceback.print_exc()
+			else:
+				print "Completed read test for the file from system [loop: {}, file: {}]".format(i, fullFilename)
+				diffTime = (time.time() - start) * 1000
+				self.printStatRecord([filename, "read", fileSize, 1, diffTime])
 
 		return True
 
+
+	def runFileWrite(self, filename):
+		fullDestFilename = os.path.join(self._destdir, filename)
+		fullSrcFilename = os.path.join(self._srcdir, filename)
+
+		try:
+			fileStat = os.stat(fullSrcFilename)
+		except:
+			print "ERROR: Source file is not found [", filename, "]. will not proceed with this test."
+			return False
+
+		fileSize = fileStat[stat.ST_SIZE]
+		for i in range(self._loopCount):
+			# Delete the target file before performing writes on it
+			self.deleteFile(fullDestFilename)
+
+			start = time.time()
+
+			try:
+				with open(fullSrcFilename, "r") as fin:
+					with open(fullDestFilename, "w") as fout:
+						readBytes = fin.read(4096 * 1024)
+						while (len(readBytes) > 0):
+							fout.write(readBytes)
+							readBytes = fin.read(4096 * 1024)
+			except Exception, e:
+				traceback.print_exc()
+			else:
+				print "Completed write test for the file from system {loop: ", i, ", srcfile: ", fullSrcFilename, ", destfile: ", fullDestFilename, "}"
+				diffTime = (time.time() - start) * 1000
+				self.printStatRecord([filename, "write", fileSize, 1, diffTime])
+
+		return True
+
+
+	def deleteFile(self, filename):
+		try:
+			fileStat = os.stat(fullSrcFilename)
+			os.unlink(filename)
+		except:
+			pass
+
+		return True
 
 
 #########################################################
