@@ -8,6 +8,9 @@ import datetime
 from datetime import datetime
 from datetime import timedelta
 
+import pymongo
+import gridfs
+
 import traceback
 import argparse
 
@@ -32,7 +35,7 @@ def getArgumentParser():
 	p = argparse.ArgumentParser()
 
 	Runner.buildArgParser(p)
-#	GridFSPerfRunner.buildArgParser(p)
+	GridFSPerfRunner.buildArgParser(p)
 	FSOverGridFSPerfRunner.buildArgParser(p)
 	return p
 	
@@ -141,7 +144,7 @@ class Runner(object):
 		self.printStatHeader(["file", "op", "size", "repeat_count", "time (millisecs)"])
 
 		for filename in self._files:
-			if (self.runFile(filename) == None):
+			if (not self.runFile(filename)):
 				print "ERROR: Failed to run for file: ", filename
 				continue
 
@@ -153,16 +156,26 @@ class Runner(object):
 
 
 	def printStatHeader(self, headers):
-		print >> self._outFile, "\t".join(map(str, headers))
+		if (headers):
+			print >> self._outFile, "\t".join(map(str, headers))
 
 
 	def printStatFooter(self, footers):
-		print >> self._outFile, "\t".join(map(str, footers))
+		if (footers):
+			print >> self._outFile, "\t".join(map(str, footers))
 
 
 	def printStatRecord(self, stats):
 		print >> self._outFile, "\t".join(map(str, stats))
 
+	@staticmethod
+	def fileExists(filename):
+		try:
+			fileStat = os.stat(filename)
+		except:
+			return False
+
+		return True
 		
 
 class FSOverGridFSPerfRunner(Runner):
@@ -200,29 +213,29 @@ class FSOverGridFSPerfRunner(Runner):
 
 	def runFile(self, filename):
 		if (not self.runFileWrite(filename)):
-			return None
+			return False
 
 		if (not self.runFileRead(filename)):
-			return None
+			return False
+
+		return True
 
 
 	def runFileRead(self, filename):
 		fullFilename = os.path.join(self._destdir, filename)
-
-		try:
-			fileStat = os.stat(fullFilename)
-		except:
+		if (not self.fileExists(fullFilename)):
 			print "ERROR: File is not accessible [", filename, "]"
 			return False
 
-		fileSize = fileStat[stat.ST_SIZE]
 		for i in range(self._loopCount):
 			start = time.time()
 
 			try:
+				fileSize = 0
 				with open(fullFilename, "r") as f:
 					readBytes = f.read(4096 * 1024)
 					while (len(readBytes) > 0):
+						fileSize += len(readBytes)
 						readBytes = f.read(4096 * 1024)
 			except Exception, e:
 				traceback.print_exc()
@@ -238,24 +251,22 @@ class FSOverGridFSPerfRunner(Runner):
 		fullDestFilename = os.path.join(self._destdir, filename)
 		fullSrcFilename = os.path.join(self._srcdir, filename)
 
-		try:
-			fileStat = os.stat(fullSrcFilename)
-		except:
-			print "ERROR: Source file is not found [", filename, "]. will not proceed with this test."
+		if (not self.fileExists(fullSrcFilename)):
+			print "ERROR: Source file is not found [", fullSrcFilename, "]. will not proceed with this test."
 			return False
 
-		fileSize = fileStat[stat.ST_SIZE]
 		for i in range(self._loopCount):
 			# Delete the target file before performing writes on it
 			self.deleteFile(fullDestFilename)
-
 			start = time.time()
 
 			try:
+				fileSize = 0
 				with open(fullSrcFilename, "r") as fin:
 					with open(fullDestFilename, "w") as fout:
 						readBytes = fin.read(4096 * 1024)
 						while (len(readBytes) > 0):
+							fileSize = len(readBytes)
 							fout.write(readBytes)
 							readBytes = fin.read(4096 * 1024)
 			except Exception, e:
@@ -279,7 +290,6 @@ class FSOverGridFSPerfRunner(Runner):
 
 
 #########################################################
-'''
 class GridFSPerfRunner(Runner):
 	"""Class to run performance tests for file operations directly on MongoDB-GridFS
 	"""
@@ -296,16 +306,109 @@ class GridFSPerfRunner(Runner):
 		print "Called for ", __name__, ".GridFSPerfRunner.__init__"
 		super(GridFSPerfRunner, self).__init__(p)
 
+		self._server = p.server
+		self._port = p.port
+		self._db = p.db
+		self._collPrefix = p.collprefix
+
+
 	def __str__(self):
 		return __name__ + ".GridFSPerfRunner"
+
 
 	def isRunnable(self):
 		if (not super(GridFSPerfRunner, self).isRunnable()):
 			return False
 
+		if (not self._server or not self._port or not self._db or not self._collPrefix):
+			return False
+
 		return True;
 
+
 	def runFile(self, filename):
-		print "This is in " + __name__ + ".runFile"
+		if (not self.runFileWrite(filename)):
+			return False
+
+		if (not self.runFileRead(filename)):
+			return False
+
 		return True
-'''
+
+
+	def runFileRead(self, filename):
+		gridFS = gridfs.GridFS(self.getDb(), self._collPrefix)
+		if (not gridFS.exists()):
+			print "File not found on GridFS, not performing read test for this file: ", filename
+			return True
+
+		for i in range(self._loopCount):
+			start = time.time()
+
+			try:
+				with gridFS.get_version(filename) as f:
+					fileSize = f.length
+					readBytes = f.read(4096 * 1024)
+					readLen = len(readBytes);
+					while (len(readBytes) > 0):
+						readBytes = f.read(4096 * 1024)
+						readLen += len(readBytes)
+
+					if (readLen != fileSize):
+						print "FATAL: Bytes read != file size [file: {}, size: {}, read: {}]".format(filename, fileSize, readLen)
+
+			except Exception, e:
+				traceback.print_exc()
+			else:
+				print "Completed read test for the file from system [loop: {}, file: {}]".format(i, filename)
+				diffTime = (time.time() - start) * 1000
+				self.printStatRecord([filename, "read", fileSize, 1, diffTime])
+
+		return True
+
+
+	def runFileWrite(self, filename):
+		fullSrcFilename = os.path.join(self._srcdir, filename)
+		if (not self.fileExists(fullSrcFilename)):
+			print "ERROR: Source file is not found [", fullSrcFilename, "]. will not proceed with this test."
+			return False
+
+		gridFS = gridfs.GridFS(self.getDb(), self._collPrefix)
+		for i in range(self._loopCount):
+			# Delete the target file before performing writes on it
+			self.deleteGridFile(filename, gridFS)
+			start = time.time()
+
+			try:
+				fileSize = 0
+				with open(fullSrcFilename, "r") as fin:
+					with gridFS.new_file(filename = filename) as fout:
+						readBytes = fin.read(4096 * 1024)
+						while (len(readBytes) > 0):
+							fileSize += len(readBytes)
+							fout.write(readBytes)
+							readBytes = fin.read(4096 * 1024)
+			except Exception, e:
+				traceback.print_exc()
+			else:
+				print "Completed write test for the file from system {loop: ", i, ", srcfile: ", fullSrcFilename, ", destfile: ", filename, "}"
+				diffTime = (time.time() - start) * 1000
+				self.printStatRecord([filename, "write", fileSize, 1, diffTime])
+
+		return True
+
+	def getDb(self):
+		dbc = pymongo.MongoClient(self._server,  self._port)
+		return dbc[self._db]
+
+
+
+	def deleteGridFile(self, filename, gridFS):
+		count = 0
+		while (gridFS.exists({"filename": filename})):
+			fin = gridFS.get_version(filename)
+			gridFS.delete(fin._id)
+			count += 1
+
+		if (count > 0):
+			print "Deleted {} instance of '{}'".format(count, filename)
