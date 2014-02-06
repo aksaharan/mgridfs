@@ -16,6 +16,10 @@ Operations tested to be working
 - chmod
 - touch - using utime (only for existing file / directory)
 - chown / by user / by group / by user and group
+- lsof
+- copy
+- move (only single file)
+- >, >>
 
 Example mount
 ================
