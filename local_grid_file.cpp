@@ -33,8 +33,9 @@ LocalMemoryGridFile::LocalMemoryGridFile(const string& filename)
 }
 
 LocalMemoryGridFile::~LocalMemoryGridFile() {
+	// This should be implcitly thread-safe. Should be called only once from only one 
+	// thread, hence does not need to be thread-safe explicitly
 	if (_dirty) {
-		//TODO: Call flush and log warning for unflushed dirty delete happing on file object
 		warn() << "Flushing file data called on in-memory file delete {filname: " << _filename 
 			<< ", size: " << _size << ", capacity: " << _capacity << ", dirty: " << _dirty
 			<< ", readOnly: " << _readOnly << ", chunkSize: " << _chunkSize
