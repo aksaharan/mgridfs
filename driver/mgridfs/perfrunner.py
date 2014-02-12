@@ -108,7 +108,7 @@ class Runner(object):
 
 		self._srcdir = p.srcdir
 		self._outFilename = p.outfile
-		if (self._outFilename):
+		if (not self._outFilename):
 			self._outFile = sys.stdout
 		else:
 			self._outFile = open("{0}.{1}".format(type(self).__name__, self._outFilename), "w")
@@ -150,7 +150,7 @@ class Runner(object):
 
 		self.printStatFooter([])
 		if (self._outFilename):
-			close(this.__outFile)
+			self._outFile.close()
 
 
 	def runFile(self):

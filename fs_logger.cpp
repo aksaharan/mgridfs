@@ -101,12 +101,11 @@ bool FSLogFile::logAll(LogLevel ll, const string& logMessage) {
 }
 
 FSLogStream::FSLogStream(LogLevel ll)
-	: _ll(ll), _enabledLL(FSLogManager::get().getLogLevel()), _dirty(false), _os(new ostringstream()) {
-	*_os << dateToCtimeString(mongo::jsTime()) << " [thread-" << pthread_self() << "] " << FSLogManager::get().logLevelToString(ll) << " ";
+	: _ll(ll), _enabledLL(FSLogManager::get().getLogLevel()), _dirty(false), _os(NULL) {
 }
 
 FSLogStream::FSLogStream(const FSLogStream& fsLogStream)
-	: _ll(fsLogStream._ll), _enabledLL(fsLogStream._enabledLL), _dirty(false), _os(new ostringstream()) {
+	: _ll(fsLogStream._ll), _enabledLL(fsLogStream._enabledLL), _dirty(false), _os(NULL) {
 }
 
 FSLogStream::~FSLogStream() {
@@ -117,4 +116,14 @@ FSLogStream::~FSLogStream() {
 		delete _os;
 		_os = NULL;
 	}
+}
+
+ostringstream& FSLogStream::stream() {
+	if (_os) {
+		return *_os;
+	}
+
+	_os = new ostringstream();
+	*_os << dateToCtimeString(mongo::jsTime()) << " [thread-" << pthread_self() << "] " << FSLogManager::get().logLevelToString(_ll) << " ";
+	return *_os;
 }
