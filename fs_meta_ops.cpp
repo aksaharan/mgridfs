@@ -43,6 +43,7 @@ int mgridfs::mgridfs_load_or_create_root() {
 				return -ENOENT;
 			}
 		}
+		dbc.done();
 	} catch (DBException& e) {
 		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
 			<< ", exception: " << e.toString() << "}" << endl;
