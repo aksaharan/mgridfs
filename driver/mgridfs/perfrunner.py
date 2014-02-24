@@ -268,7 +268,7 @@ class FSOverGridFSPerfRunner(Runner):
 					with open(fullDestFilename, "w") as fout:
 						readBytes = fin.read(4096 * 1024)
 						while (len(readBytes) > 0):
-							fileSize = len(readBytes)
+							fileSize += len(readBytes)
 							fout.write(readBytes)
 							readBytes = fin.read(4096 * 1024)
 			except Exception, e:
