@@ -108,10 +108,10 @@ class Runner(object):
 
 		self._srcdir = p.srcdir
 		self._outFilename = p.outfile
-		if (self._outFilename == None):
+		if (not self._outFilename):
 			self._outFile = sys.stdout
 		else:
-			self._outFile = open(self._outFilename, "w")
+			self._outFile = open("{0}.{1}".format(type(self).__name__, self._outFilename), "w")
 
 		self._loopCount = p.loopcnt
 
@@ -149,6 +149,8 @@ class Runner(object):
 				continue
 
 		self.printStatFooter([])
+		if (self._outFilename):
+			self._outFile.close()
 
 
 	def runFile(self):
@@ -240,9 +242,9 @@ class FSOverGridFSPerfRunner(Runner):
 			except Exception, e:
 				traceback.print_exc()
 			else:
-				print "Completed read test for the file from system [loop: {}, file: {}]".format(i, fullFilename)
+				print "Completed read test for the file from system [loop: {0}, file: {1}]".format(i, fullFilename)
 				diffTime = (time.time() - start) * 1000
-				self.printStatRecord([filename, "read", fileSize, 1, diffTime])
+				self.printStatRecord([type(self).__name__, filename, "read", fileSize, 1, diffTime])
 
 		return True
 
@@ -266,7 +268,7 @@ class FSOverGridFSPerfRunner(Runner):
 					with open(fullDestFilename, "w") as fout:
 						readBytes = fin.read(4096 * 1024)
 						while (len(readBytes) > 0):
-							fileSize = len(readBytes)
+							fileSize += len(readBytes)
 							fout.write(readBytes)
 							readBytes = fin.read(4096 * 1024)
 			except Exception, e:
@@ -274,7 +276,7 @@ class FSOverGridFSPerfRunner(Runner):
 			else:
 				print "Completed write test for the file from system {loop: ", i, ", srcfile: ", fullSrcFilename, ", destfile: ", fullDestFilename, "}"
 				diffTime = (time.time() - start) * 1000
-				self.printStatRecord([filename, "write", fileSize, 1, diffTime])
+				self.printStatRecord([type(self).__name__, filename, "write", fileSize, 1, diffTime])
 
 		return True
 
@@ -355,14 +357,14 @@ class GridFSPerfRunner(Runner):
 						readLen += len(readBytes)
 
 					if (readLen != fileSize):
-						print "FATAL: Bytes read != file size [file: {}, size: {}, read: {}]".format(filename, fileSize, readLen)
+						print "FATAL: Bytes read != file size [file: {0}, size: {1}, read: {2}]".format(filename, fileSize, readLen)
 
 			except Exception, e:
 				traceback.print_exc()
 			else:
-				print "Completed read test for the file from system [loop: {}, file: {}]".format(i, filename)
+				print "Completed read test for the file from system [loop: {0}, file: {1}]".format(i, filename)
 				diffTime = (time.time() - start) * 1000
-				self.printStatRecord([filename, "read", fileSize, 1, diffTime])
+				self.printStatRecord([type(self).__name__, filename, "read", fileSize, 1, diffTime])
 
 		return True
 
@@ -393,14 +395,14 @@ class GridFSPerfRunner(Runner):
 			else:
 				print "Completed write test for the file from system {loop: ", i, ", srcfile: ", fullSrcFilename, ", destfile: ", filename, "}"
 				diffTime = (time.time() - start) * 1000
-				self.printStatRecord([filename, "write", fileSize, 1, diffTime])
+				self.printStatRecord([type(self).__name__, filename, "write", fileSize, 1, diffTime])
 
 		return True
+
 
 	def getDb(self):
 		dbc = pymongo.MongoClient(self._server,  self._port)
 		return dbc[self._db]
-
 
 
 	def deleteGridFile(self, filename, gridFS):
@@ -411,4 +413,4 @@ class GridFSPerfRunner(Runner):
 			count += 1
 
 		if (count > 0):
-			print "Deleted {} instance of '{}'".format(count, filename)
+			print "Deleted {0} instance of '{1}'".format(count, filename)

@@ -13,7 +13,6 @@ from mgridfs import *
 
 
 def main():
-	print "This is test print from the main.....\n"
 	argParser = perfrunner.getArgumentParser()
 	args = argParser.parse_args()
 	runner = perfrunner.run(args)

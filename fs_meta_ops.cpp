@@ -43,6 +43,7 @@ int mgridfs::mgridfs_load_or_create_root() {
 				return -ENOENT;
 			}
 		}
+		dbc.done();
 	} catch (DBException& e) {
 		error() << "Caught exception in processing {code: " << e.getCode() << ", what: " << e.what()
 			<< ", exception: " << e.toString() << "}" << endl;
@@ -118,18 +119,21 @@ int mgridfs::mgridfs_statfs(const char *file, struct statvfs *statEntry) {
 	 * 	ok: 1.0 
 	 * }
 	 */
-	trace() << "Received db.stats from server " << retInfo << " -- SS: " << retInfo.getIntField("storageSize") 
-			<< " -- FS: " << retInfo.getIntField("fileSize") << " -- O: " << retInfo.getIntField("objects")
+	BSONElement ssElem = retInfo.getField("storageSize");
+	BSONElement fsElem = retInfo.getField("fileSize");
+	BSONElement oElem = retInfo.getField("objects");
+	trace() << "Received db.stats from server " << retInfo << " -- SS: " << ssElem.numberLong() 
+			<< " -- FS: " << fsElem.numberLong() << " -- O: " << oElem.numberLong()
 			<< endl;
 	bzero(statEntry, sizeof(*statEntry));
 	statEntry->f_bsize = 1;
 	statEntry->f_frsize = 1;
-	statEntry->f_blocks = retInfo.getIntField("fileSize");
-	statEntry->f_bfree = statEntry->f_bavail = statEntry->f_blocks - retInfo.getIntField("storageSize");
+	statEntry->f_blocks = fsElem.numberLong();
+	statEntry->f_bfree = statEntry->f_bavail = statEntry->f_blocks - ssElem.numberLong();
 
 	// objects, could be more fine tuned based on collection size instead of just objects
 	// Do inode calculations relative to the file and the storage sizes for the database
-	statEntry->f_files = retInfo.getIntField("objects");
+	statEntry->f_files = oElem.numberLong();
 	if (statEntry->f_bavail > 0 && statEntry->f_blocks > 0) {
 		long totalObjects = static_cast<long>(statEntry->f_blocks * 1.0 / (statEntry->f_blocks - statEntry->f_bavail) * statEntry->f_files);
 		statEntry->f_ffree = statEntry->f_favail = totalObjects - statEntry->f_files;

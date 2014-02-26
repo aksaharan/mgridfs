@@ -61,7 +61,7 @@ public:
 	inline FSLogStream& operator<<(const string& s) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << s;
+			stream() << s;
 		}
 		return *this;
 	}
@@ -69,7 +69,7 @@ public:
 	inline FSLogStream& operator<<(char c) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << c;
+			stream() << c;
 		}
 		return *this;
 	}
@@ -77,7 +77,7 @@ public:
 	inline FSLogStream& operator<<(int i) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << i;
+			stream() << i;
 		}
 		return *this;
 	}
@@ -85,7 +85,7 @@ public:
 	inline FSLogStream& operator<<(unsigned int ui) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << ui;
+			stream() << ui;
 		}
 		return *this;
 	}
@@ -93,7 +93,7 @@ public:
 	inline FSLogStream& operator<<(long l) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << l;
+			stream() << l;
 		}
 		return *this;
 	}
@@ -101,7 +101,7 @@ public:
 	inline FSLogStream& operator<<(unsigned long l) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << l;
+			stream() << l;
 		}
 		return *this;
 	}
@@ -109,7 +109,7 @@ public:
 	inline FSLogStream& operator<<(long long ll) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << ll;
+			stream() << ll;
 		}
 		return *this;
 	}
@@ -117,7 +117,7 @@ public:
 	inline FSLogStream& operator<<(unsigned long long ll) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << ll;
+			stream() << ll;
 		}
 		return *this;
 	}
@@ -125,7 +125,7 @@ public:
 	inline FSLogStream& operator<<(short s) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << s;
+			stream() << s;
 		}
 		return *this;
 	}
@@ -133,7 +133,7 @@ public:
 	inline FSLogStream& operator<<(float f) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << f;
+			stream() << f;
 		}
 		return *this;
 	}
@@ -141,7 +141,7 @@ public:
 	inline FSLogStream& operator<<(double d) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << d;
+			stream() << d;
 		}
 		return *this;
 	}
@@ -149,7 +149,7 @@ public:
 	inline FSLogStream& operator<<(bool b) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << b;
+			stream() << b;
 		}
 		return *this;
 	}
@@ -157,7 +157,7 @@ public:
 	inline FSLogStream& operator<<(std::ostream& (*manip)(std::ostream&)) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << manip;
+			stream() << manip;
 		}
 		return *this;
 	}
@@ -165,7 +165,7 @@ public:
 	inline FSLogStream& operator<<(std::ios_base& (*manip)(std::ios_base&)) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << manip;
+			stream() << manip;
 		}
 		return *this;
 	}
@@ -174,7 +174,7 @@ public:
 	inline FSLogStream& operator<<(T t) {
 		if (_ll >= _enabledLL) {
 			_dirty = true;
-			*this->_os << t.toString();
+			stream() << t.toString();
 		}
 		return *this;
 	}
@@ -185,13 +185,15 @@ private:
 	ostringstream* _os;
 
 	FSLogStream& operator=(const FSLogStream&);
+
+	ostringstream& stream();
 };
 
 template<>
 inline FSLogStream& FSLogStream::operator<< <const char*>(const char* s) {
 	if (_ll >= _enabledLL) {
 		_dirty = true;
-		*this->_os << s;
+		stream() << s;
 	}
 	return *this;
 }

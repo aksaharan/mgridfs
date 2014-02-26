@@ -1,0 +1,11 @@
+# Create 1000 nested directories
+time for i in $(seq 10); do for ii in $(seq 10); do for iii in $(seq 10); do echo "`date` - Creating Directory: test/$i/$ii/$iii"; mkdir -p test/$i/$ii/$iii; done done done
+
+# Remove 1000 nested directories
+time rm -rf test/[0-9]*
+
+# Create 1000 - 100 byte files
+time for i in $(seq 1000); do echo "`date` - Creating file ................................. .......... test file ......: test/$i" >> test/$i.txt; done
+
+# Remove 1000 - 100 byte files
+time for i in $(seq 1000); do rm -f test/$i.txt; done
